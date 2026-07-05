@@ -1,0 +1,29 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# uv
+# Per-recipe lockfiles ARE committed (they pin the recipe's resolved deps).
+# The cache and ephemeral venvs are not.
+.uv/
+
+# Local Bir trace + experiment output (recipes write here at runtime)
+.bir/
+
+# Secrets & environment — recipes read keys from env vars only, never from git
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+CLAUDE.md

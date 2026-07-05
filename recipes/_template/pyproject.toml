@@ -1,0 +1,15 @@
+[project]
+# TODO: rename to bir-cookbook-<recipe-name>
+name = "bir-cookbook-template"
+version = "0.0.0"
+description = "TODO: Bir cookbook recipe description."
+requires-python = ">=3.11"
+dependencies = [
+    "bir-sdk==0.3.0",
+    # TODO: add the real provider library (free provider), e.g. "mistralai>=1.0",
+    # "ollama>=0.3", or "openai>=1.0" pointed at a free Groq/OpenAI-compatible endpoint.
+]
+
+[tool.uv]
+# Runnable app, not an installable library — no build backend needed.
+package = false

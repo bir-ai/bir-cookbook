@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  # Nightly leg catches upstream SDK drift (main) and, when a free key secret is
+  # present, exercises the real free API. Manual dispatch runs the same legs.
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  # Emit the recipe list so the smoke matrix stays in sync with recipes/ with no
+  # hand-maintained list. A recipe is any recipes/<name>/ (name not starting with
+  # "_") that has a main.py. Stdlib-only, so no install step is needed here.
+  discover:
+    name: Discover recipes
+    runs-on: ubuntu-latest
+    outputs:
+      recipes: ${{ steps.find.outputs.recipes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: find
+        run: echo "recipes=$(python scripts/smoke.py --list)" >> "$GITHUB_OUTPUT"
+
+  # Every recipe's offline smoke path against the PINNED bir-sdk==0.3.0. No API
+  # keys, no network: --smoke swaps in each recipe's in-file fake client. Runs on
+  # every push and PR (works on forks, which have no secrets).
+  smoke:
+    name: Smoke (pinned bir-sdk==0.3.0)
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        recipe: ${{ fromJSON(needs.discover.outputs.recipes) }}
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Smoke-run ${{ matrix.recipe }}
+        working-directory: recipes/${{ matrix.recipe }}
+        env:
+          BIR_COOKBOOK_SMOKE: "1"
+        run: uv run --python ${{ matrix.python-version }} python main.py --smoke
+
+  # Same smoke path, but with the SDK installed from main instead of the pinned
+  # release, so API drift on the SDK's main branch is caught here before a
+  # release ships it to users. Nightly / manual only.
+  smoke-sdk-main:
+    name: Smoke (bir-sdk @ main)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        recipe: ${{ fromJSON(needs.discover.outputs.recipes) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Smoke-run ${{ matrix.recipe }} against SDK main
+        working-directory: recipes/${{ matrix.recipe }}
+        env:
+          BIR_COOKBOOK_SMOKE: "1"
+        run: |
+          uv sync
+          uv pip install --reinstall "bir-sdk @ git+https://github.com/bir-ai/bir-python@main"
+          uv run --no-sync python main.py --smoke
+
+  # NOTE: Phase 1 (the Ollama feature tour) has no live CI leg — Ollama needs a
+  # local model server that CI runners don't have, so those recipes are verified
+  # via --smoke here and run live locally. A live free-API job returns in Phase 2
+  # for the online integration recipes (Gemini/Mistral/…), self-skipping when the
+  # provider key secret is absent.
