@@ -27,8 +27,9 @@ Mistral, Groq, CrewAI, LlamaIndex, …) using **free** providers. These come
 *after* the tour on purpose: their only job is the integration wiring — the SDK
 features themselves are already taught in Phase 1.
 
-> **Status:** repo skeleton + CI in place. Phase 1, Lesson 01 is the next thing
-> to build. No recipes are implemented yet.
+> **Status:** repo skeleton + CI in place. Phase 1, Lesson 01
+> ([`ollama-01-basics`](recipes/ollama-01-basics/)) is implemented. Lessons
+> 02–08 are next.
 
 ---
 
@@ -41,7 +42,7 @@ they cover essentially the whole SDK surface.
 
 | # | Lesson | What it teaches | SDK surface exercised |
 | --- | --- | --- | --- |
-| 01 | basics | your first traced Ollama call | `configure`, `@observe`, `generation` (via `trace_ollama_chat`), `load_traces` |
+| 01 | [basics](recipes/ollama-01-basics/) ✅ | your first traced Ollama call | `configure`, `@observe`, `generation` (via `trace_ollama_chat`), `load_traces` |
 | 02 | structure | nested work + the RAG shape | `trace` / `span`, `tool_call`, `retrieval` (`add_document`/`set_documents`), `score` |
 | 03 | prompts & correlation | prompt versioning + log linking | `prompt()` (templates/versions), `get_current_trace_id` / `get_current_span_id` |
 | 04 | async, streaming, generators | non-blocking + token streaming | async `@observe`, streaming generation, generator tracing |
