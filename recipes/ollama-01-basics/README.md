@@ -29,21 +29,21 @@ to fill in.
 uv run python main.py --smoke
 
 # Real run — needs a local Ollama server and a pulled model:
-ollama pull llama3.2
+ollama pull llama3.2:1b
 uv run python main.py --prompt "In one sentence, what is LLM observability?"
 ```
 
-Flags: `--prompt`, `--model` (default `llama3.2`), `--trace-path`, `--smoke`
+Flags: `--prompt`, `--model` (default `llama3.2:1b`), `--trace-path`, `--smoke`
 (also `BIR_COOKBOOK_SMOKE=1`).
 
 If Ollama isn't reachable, the real run exits with a message pointing you to
-`ollama pull llama3.2` and to `--smoke`.
+`ollama pull llama3.2:1b` and to `--smoke`.
 
 ## What you'll see
 
 ```
 [bir] trace_id=...
-[bir] events=2  model=llama3.2  usage: in=… out=… total=…
+[bir] events=2  model=llama3.2:1b  usage: in=… out=… total=…
 [bir] wrote ./.bir/traces.jsonl
 ```
 

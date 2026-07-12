@@ -15,7 +15,7 @@ Run it:
   * offline (no Ollama, no network, deterministic — what CI runs):
       uv run python main.py --smoke
   * real (needs a local Ollama server + a pulled model):
-      ollama pull llama3.2
+      ollama pull llama3.2:1b
       uv run python main.py --prompt "In one sentence, what is tracing?"
 
 Ollama is local and keyless, so there is no API key to set.
@@ -31,7 +31,7 @@ from bir import configure, load_traces, observe
 from bir.integrations.ollama import trace_chat as trace_ollama_chat
 
 DEFAULT_TRACE_PATH = Path(__file__).resolve().parent / ".bir" / "traces.jsonl"
-DEFAULT_MODEL = "llama3.2"
+DEFAULT_MODEL = "llama3.2:1b"
 DEFAULT_PROMPT = "In one sentence, what is LLM observability?"
 
 # Keep the client module-level so it is never passed as an @observe argument and
@@ -114,7 +114,7 @@ def _build_client(smoke: bool):
     except Exception as exc:  # pragma: no cover - real-path only
         raise SystemExit(
             "Could not reach a local Ollama server at http://localhost:11434.\n"
-            "Start Ollama and pull a model (`ollama pull llama3.2`), "
+            "Start Ollama and pull a model (`ollama pull llama3.2:1b`), "
             "or run offline with --smoke."
         ) from exc
     return client

@@ -27,9 +27,10 @@ Mistral, Groq, CrewAI, LlamaIndex, …) using **free** providers. These come
 *after* the tour on purpose: their only job is the integration wiring — the SDK
 features themselves are already taught in Phase 1.
 
-> **Status:** repo skeleton + CI in place. Phase 1, Lesson 01
-> ([`ollama-01-basics`](recipes/ollama-01-basics/)) is implemented. Lessons
-> 02–08 are next.
+> **Status:** repo skeleton + CI in place. Phase 1, Lessons 01–02
+> ([`ollama-01-basics`](recipes/ollama-01-basics/),
+> [`ollama-02-structure`](recipes/ollama-02-structure/)) are implemented.
+> Lessons 03–08 are next.
 
 ---
 
@@ -43,7 +44,7 @@ they cover essentially the whole SDK surface.
 | # | Lesson | What it teaches | SDK surface exercised |
 | --- | --- | --- | --- |
 | 01 | [basics](recipes/ollama-01-basics/) ✅ | your first traced Ollama call | `configure`, `@observe`, `generation` (via `trace_ollama_chat`), `load_traces` |
-| 02 | structure | nested work + the RAG shape | `trace` / `span`, `tool_call`, `retrieval` (`add_document`/`set_documents`), `score` |
+| 02 | [structure](recipes/ollama-02-structure/) ✅ | nested work + the RAG shape | `trace` / `span`, `tool_call`, `retrieval` (`add_document`/`set_documents`), `score` |
 | 03 | prompts & correlation | prompt versioning + log linking | `prompt()` (templates/versions), `get_current_trace_id` / `get_current_span_id` |
 | 04 | async, streaming, generators | non-blocking + token streaming | async `@observe`, streaming generation, generator tracing |
 | 05 | governance | production controls | `sample_rate` / `sample_rules`, `enabled` kill-switch, redaction (`additional_secret_keys` / `additional_redaction_patterns`), capture limits, `service` / `environment` / `source` tags |
@@ -68,7 +69,7 @@ they cover essentially the whole SDK surface.
 
 - [`uv`](https://docs.astral.sh/uv/) — each recipe is its own uv project.
 - For **real** Ollama runs: install [Ollama](https://ollama.com) and pull a small
-  model, e.g. `ollama pull llama3.2`. The offline `--smoke` path needs neither
+  model, e.g. `ollama pull llama3.2:1b`. The offline `--smoke` path needs neither
   Ollama nor a model.
 
 ## The `--smoke` contract
