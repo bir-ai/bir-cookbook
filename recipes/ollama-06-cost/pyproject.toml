@@ -1,0 +1,13 @@
+[project]
+name = "bir-cookbook-ollama-06-cost"
+version = "0.0.0"
+description = "Bir cookbook · Phase 1 Lesson 06 — cost: model_prices auto-cost, set_usage, set_cost, and a spend rollup on local Ollama."
+requires-python = ">=3.11"
+dependencies = [
+    "bir-sdk==0.3.0",
+    "ollama>=0.3",
+]
+
+[tool.uv]
+# Runnable app, not an installable library — no build backend needed.
+package = false

@@ -27,13 +27,14 @@ Mistral, Groq, CrewAI, LlamaIndex, …) using **free** providers. These come
 *after* the tour on purpose: their only job is the integration wiring — the SDK
 features themselves are already taught in Phase 1.
 
-> **Status:** repo skeleton + CI in place. Phase 1, Lessons 01–05
+> **Status:** repo skeleton + CI in place. Phase 1, Lessons 01–06
 > ([`ollama-01-basics`](recipes/ollama-01-basics/),
 > [`ollama-02-structure`](recipes/ollama-02-structure/),
 > [`ollama-03-prompts`](recipes/ollama-03-prompts/),
 > [`ollama-04-async-streaming`](recipes/ollama-04-async-streaming/),
-> [`ollama-05-governance`](recipes/ollama-05-governance/)) are
-> implemented. Lessons 06–08 are next.
+> [`ollama-05-governance`](recipes/ollama-05-governance/),
+> [`ollama-06-cost`](recipes/ollama-06-cost/)) are
+> implemented. Lessons 07–08 are next.
 
 ---
 
@@ -51,7 +52,7 @@ they cover essentially the whole SDK surface.
 | 03 | [prompts & correlation](recipes/ollama-03-prompts/) ✅ | prompt versioning + log linking | `prompt()` (templates/versions), `generation(..., prompt=)`, `get_current_trace_id` / `get_current_span_id`, `bir.logging.install_trace_id_filter` |
 | 04 | [async, streaming, generators](recipes/ollama-04-async-streaming/) ✅ | non-blocking + token streaming | async `@observe`, streaming generation, generator tracing |
 | 05 | [governance](recipes/ollama-05-governance/) ✅ | production controls | `sample_rate` / `sample_rules`, `enabled` kill-switch, redaction (`additional_secret_keys` / `additional_redaction_patterns`), capture limits, `service` / `environment` / `source` tags |
-| 06 | cost | spend tracking | `model_prices` auto-cost, `set_cost`, `set_usage` |
+| 06 | [cost](recipes/ollama-06-cost/) ✅ | spend tracking | `model_prices` auto-cost, `set_cost`, `set_usage` |
 | 07 | persistence | files + server | file rotation (`max_bytes` / `backup_count`), `send_events` to a Bir server |
 | 08 | evals | the offline eval loop | `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments` |
 
