@@ -39,7 +39,7 @@ tracking, whole eval experiments. All eight lessons are implemented.
 | 01 | [basics](recipes/ollama-01-basics/) | your first traced calls: `configure`, `@observe`, a `generation` via each of `trace_ollama_chat` and `trace_generate`, `load_traces` |
 | 02 | [structure](recipes/ollama-02-structure/) | nested work and the RAG shape: `trace` / `span`, `tool_call`, `retrieval`, `score` |
 | 03 | [prompts](recipes/ollama-03-prompts/) | prompt versioning and log correlation: `prompt()`, `generation(..., prompt=)`, `get_current_trace_id` / `get_current_span_id`, the logging filter |
-| 04 | [async-streaming](recipes/ollama-04-async-streaming/) | async `@observe`, streaming generations, generator tracing |
+| 04 | [async-streaming](recipes/ollama-04-async-streaming/) | async `@observe`, streaming generations, `trace_generate_async` (streaming generate), generator tracing |
 | 05 | [governance](recipes/ollama-05-governance/) | production controls: sampling, the `enabled` kill switch, redaction, capture limits, `service` / `environment` / `source` tags |
 | 06 | [cost](recipes/ollama-06-cost/) | spend tracking: `model_prices` auto-cost, `set_cost`, `set_usage` |
 | 07 | [persistence](recipes/ollama-07-persistence/) | trace files and servers: rotation (`max_bytes` / `backup_count`), `send_events` |

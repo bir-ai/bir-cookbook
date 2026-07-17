@@ -15,6 +15,13 @@ and yield — and the SDK traces all three without changing how the code behaves
     arrive; meanwhile the wrapper assembles the output from each chunk's
     ``message.content`` delta and reads token usage from the terminal ``done``
     chunk. The reloaded generation event holds the full text AND the usage.
+  * **async + streaming** — ``trace_generate_async(..., stream=True)`` combines
+    the two on Ollama's other surface and completes the wrapper matrix (chat /
+    generate × sync / async). The awaited coroutine resolves to an async
+    iterator; ``generate`` chunks carry the text delta at ``response`` (not
+    ``message.content``), the terminal ``done`` chunk carries the top-level
+    token counts, and the generation's output and usage finalize only once the
+    stream is fully consumed.
   * **generators** — ``@observe`` also traces generator functions, for their
     full iteration lifetime: creation stays lazy, the trace stays open across
     every ``next``, and it finalizes on exhaustion
@@ -44,6 +51,7 @@ from bir import configure, get_current_trace_id, load_traces, observe
 from bir.integrations.ollama import (
     trace_chat as trace_ollama_chat,
     trace_chat_async as trace_ollama_chat_async,
+    trace_generate_async as trace_ollama_generate_async,
 )
 
 DEFAULT_TRACE_PATH = Path(__file__).resolve().parent / ".bir" / "traces.jsonl"
@@ -59,13 +67,14 @@ CONCURRENT_QUESTIONS = (
     "In one short sentence: what is backpressure?",
 )
 
-# Part C consumes this many items before close() — enough to prove the
+# Part D consumes this many items before close() — enough to prove the
 # generator ran, few enough that the stream is clearly cut short.
 EARLY_CLOSE_AFTER = 3
 
-# One run appends exactly these five traces: two async tasks, one streamed
-# call, and the generator consumed twice (fully, then closed early).
-TRACES_PER_RUN = 5
+# One run appends exactly these six traces: two async tasks, one streamed chat
+# call, one async streamed generate call, and the generator consumed twice
+# (fully, then closed early).
+TRACES_PER_RUN = 6
 
 # Keep the clients module-level so they are never passed as @observe arguments
 # and therefore never captured as inputs (see CLAUDE.md).
@@ -79,11 +88,18 @@ _ASYNC_CLIENT = None
 # chunks carrying ``message.content`` deltas, ending in a ``done`` chunk that
 # holds the token counts at the top level (``prompt_eval_count`` /
 # ``eval_count``) exactly like Ollama's terminal chunk. The async fake mirrors
-# ``ollama.AsyncClient``: its ``chat`` is a coroutine the async wrapper awaits.
+# ``ollama.AsyncClient``: its ``chat`` is a coroutine the async wrapper awaits,
+# and its ``generate`` coroutine resolves to an async iterator of chunks that
+# carry their delta at ``response`` instead of ``message.content``.
 # --------------------------------------------------------------------------- #
 _SMOKE_STREAM_TOKENS = (
     "(smoke) ", "Streaming ", "keeps ", "the ", "tokens ", "flowing ",
     "while ", "the ", "trace ", "records ", "the ", "whole ", "answer.",
+)
+
+_SMOKE_GENERATE_TOKENS = (
+    "(smoke) ", "The ", "generate ", "surface ", "streams ", "its ",
+    "completion ", "at ", "'response', ", "one ", "delta ", "per ", "chunk.",
 )
 
 
@@ -121,6 +137,18 @@ class _FakeChatChunk:
                  prompt_eval_count: int | None = None, eval_count: int | None = None) -> None:
         self.model = model
         self.message = _FakeMessage("assistant", content)
+        self.done = done
+        self.prompt_eval_count = prompt_eval_count
+        self.eval_count = eval_count
+
+
+class _FakeGenerateChunk:
+    """One streamed generate chunk: a ``response`` delta, counts only when done."""
+
+    def __init__(self, *, model: str, response: str, done: bool,
+                 prompt_eval_count: int | None = None, eval_count: int | None = None) -> None:
+        self.model = model
+        self.response = response
         self.done = done
         self.prompt_eval_count = prompt_eval_count
         self.eval_count = eval_count
@@ -165,6 +193,25 @@ class _FakeAsyncOllamaClient:
         # Yield the event loop once so gather genuinely interleaves the tasks.
         await asyncio.sleep(0)
         return self._sync.chat(model=model, messages=messages)
+
+    async def generate(self, *, model: str, prompt: str, stream: bool = False, **_kwargs):
+        # Like the real AsyncClient with ``stream=True``, the awaited coroutine
+        # resolves to an async iterator of chunks (this lesson only streams).
+        await asyncio.sleep(0)
+        return self._stream_generate(model, prompt)
+
+    async def _stream_generate(self, model: str, prompt: str):
+        for token in _SMOKE_GENERATE_TOKENS:
+            await asyncio.sleep(0)
+            yield _FakeGenerateChunk(model=model, response=token, done=False)
+        # The terminal chunk repeats an empty delta and carries the counts.
+        yield _FakeGenerateChunk(
+            model=model,
+            response="",
+            done=True,
+            prompt_eval_count=len(prompt.split()),
+            eval_count=len(_SMOKE_GENERATE_TOKENS),
+        )
 
 
 def _build_clients(smoke: bool):
@@ -250,7 +297,40 @@ def stream_answer(question: str, model: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Part C — generators: @observe traces a generator function for its whole
+# Part C — async + streaming: trace_generate_async(stream=True) on Ollama's
+# generate surface — the fourth and last wrapper in the matrix. The awaited
+# coroutine resolves to an async iterator; the wrapper assembles the output
+# from each chunk's ``response`` delta and reads usage from the done chunk.
+# --------------------------------------------------------------------------- #
+@observe(name="astream_completion", capture_inputs=True, capture_outputs=True, metadata={"recipe": RECIPE})
+async def astream_completion(prompt: str, model: str) -> str:
+    """Stream one async generate call to the terminal; return the text we saw."""
+
+    # The generate surface takes a plain ``prompt`` string, not a messages
+    # list. The generation's output and usage finalize only once the async
+    # iterator is fully consumed — an abandoned stream would record a partial
+    # answer and no usage, exactly like part D's early close().
+    stream = await trace_ollama_generate_async(
+        _ASYNC_CLIENT.generate,
+        model=model,
+        prompt=prompt,
+        stream=True,
+        bir_metadata={"recipe": RECIPE},
+    )
+    parts: list[str] = []
+    async for chunk in stream:
+        # Generate chunks carry their delta at ``response`` (chat uses
+        # ``message.content``); the terminal done chunk repeats an empty one.
+        text = chunk.response
+        if text:
+            print(text, end="", flush=True)
+            parts.append(text)
+    print()
+    return "".join(parts)
+
+
+# --------------------------------------------------------------------------- #
+# Part D — generators: @observe traces a generator function for its whole
 # iteration lifetime, not just its creation.
 # --------------------------------------------------------------------------- #
 @observe(name="stream_tokens", capture_inputs=True, capture_outputs=True, metadata={"recipe": RECIPE})
@@ -302,8 +382,8 @@ def _close_early(question: str, model: str) -> None:
 
 # --------------------------------------------------------------------------- #
 # Self-verification: reload this run's traces and check each part's claim —
-# isolated async traces, the assembled streamed output + usage, and the
-# generator outcomes.
+# isolated async traces, the assembled streamed outputs + usage (chat and
+# generate), and the generator outcomes.
 # --------------------------------------------------------------------------- #
 def _root(trace):
     return next(e for e in trace.events if e.type == "trace")
@@ -313,7 +393,12 @@ def _generation(trace):
     return next(e for e in trace.events if e.type == "generation")
 
 
-def _summarize(trace_path: Path, async_results: list[dict[str, str]], streamed_text: str) -> None:
+def _summarize(
+    trace_path: Path,
+    async_results: list[dict[str, str]],
+    streamed_text: str,
+    astreamed_text: str,
+) -> None:
     traces = load_traces(trace_path)[-TRACES_PER_RUN:]
 
     print(f"\n[bir] traces this run ({len(traces)}):")
@@ -322,7 +407,7 @@ def _summarize(trace_path: Path, async_results: list[dict[str, str]], streamed_t
         gens = [e for e in trace.events if e.type == "generation"]
         total = sum((g.usage or {}).get("total_tokens", 0) for g in gens)
         model = gens[-1].model if gens else "?"
-        print(f"[bir]   {trace.id}  root={root.name:<13}  events={len(trace.events)}  model={model}  total_tokens={total}")
+        print(f"[bir]   {trace.id}  root={root.name:<18}  events={len(trace.events)}  model={model}  total_tokens={total}")
 
     # A — each task's get_current_trace_id() names a real, distinct trace whose
     # captured request holds only that task's question.
@@ -348,7 +433,17 @@ def _summarize(trace_path: Path, async_results: list[dict[str, str]], streamed_t
         f"out={usage.get('output_tokens')} total={usage.get('total_tokens')}"
     )
 
-    # C — the generator roots carry outcome + bounded item count, never the
+    # C — same claim for the async generate stream: fully consuming the async
+    # iterator finalized the assembled ``response`` text and the usage.
+    gen = _generation(next(t for t in traces if _root(t).name == "astream_completion"))
+    usage = gen.usage or {}
+    print(
+        f"[bir] async streaming generate: reloaded output == streamed text: {gen.output == astreamed_text}  "
+        f"chars={len(str(gen.output))}  usage: in={usage.get('input_tokens')} "
+        f"out={usage.get('output_tokens')} total={usage.get('total_tokens')}"
+    )
+
+    # D — the generator roots carry outcome + bounded item count, never the
     # yielded values themselves.
     print("[bir] generator lifetimes (metadata.generator):")
     for trace in traces:
@@ -394,7 +489,10 @@ def main() -> None:
         print("\n== B · streaming: trace_chat(stream=True) ==")
         streamed_text = stream_answer(args.prompt, args.model)
 
-        print("\n== C · generators: @observe on a generator function ==")
+        print("\n== C · async + streaming: trace_generate_async(stream=True) ==")
+        astreamed_text = asyncio.run(astream_completion(args.prompt, args.model))
+
+        print("\n== D · generators: @observe on a generator function ==")
         _consume_fully(args.prompt, args.model)
         _close_early(args.prompt, args.model)
     except Exception as exc:  # pragma: no cover - real-path only
@@ -406,7 +504,7 @@ def main() -> None:
             f"(`ollama pull {args.model}`), or run with --smoke."
         ) from exc
 
-    _summarize(trace_path, async_results, streamed_text)
+    _summarize(trace_path, async_results, streamed_text, astreamed_text)
 
 
 if __name__ == "__main__":
