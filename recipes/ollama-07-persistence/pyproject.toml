@@ -1,0 +1,13 @@
+[project]
+name = "bir-cookbook-ollama-07-persistence"
+version = "0.0.0"
+description = "Bir cookbook · Phase 1 Lesson 07 — persistence: file rotation (max_bytes/backup_count) and send_events to a Bir server, on local Ollama."
+requires-python = ">=3.11"
+dependencies = [
+    "bir-sdk==0.3.0",
+    "ollama>=0.3",
+]
+
+[tool.uv]
+# Runnable app, not an installable library — no build backend needed.
+package = false
