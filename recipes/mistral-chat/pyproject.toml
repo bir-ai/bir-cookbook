@@ -1,0 +1,13 @@
+[project]
+name = "bir-cookbook-mistral-chat"
+version = "0.0.0"
+description = "Bir cookbook · Phase 2 — trace one Mistral chat call."
+requires-python = ">=3.11"
+dependencies = [
+    "bir-sdk==0.3.0",
+    "mistralai>=1.0",
+]
+
+[tool.uv]
+# Runnable app, not an installable library — no build backend needed.
+package = false

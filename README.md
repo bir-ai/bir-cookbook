@@ -45,12 +45,18 @@ tracking, whole eval experiments. All eight lessons are implemented.
 | 07 | [persistence](recipes/ollama-07-persistence/) | trace files and servers: rotation (`max_bytes` / `backup_count`), `send_events` |
 | 08 | [evals](recipes/ollama-08-evals/) | the offline eval loop: `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments` |
 
-## Integration recipes (phase 2, planned)
+## Integration recipes (phase 2)
 
-With the tour as the reference for SDK features, a second set of recipes will
-show only the wiring for each SDK integration, still on free providers:
+With the tour as the reference for SDK features, a second set of recipes shows
+only the wiring for each SDK integration, still on free providers:
 
-- Providers: Gemini, Mistral, Cohere, and Groq / OpenRouter through the
+| Status | Recipe | Provider | Shows |
+| --- | --- | --- | --- |
+| ✅ | [mistral-chat](recipes/mistral-chat/) | Mistral La Plateforme (free tier) | `bir.integrations.mistral.trace_chat` around `client.chat.complete` |
+
+Planned next:
+
+- Providers: Gemini, Cohere, and Groq / OpenRouter through the
   OpenAI-compatible client or litellm.
 - Frameworks on a free model: LlamaIndex, CrewAI, Haystack, AutoGen,
   OpenAI Agents, Pydantic AI, DSPy, Instructor.
