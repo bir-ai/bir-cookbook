@@ -42,8 +42,8 @@ tracking, whole eval experiments. All eight lessons are implemented.
 | 04 | [async-streaming](recipes/ollama-04-async-streaming/) | async `@observe`, streaming generations, `trace_generate_async` (streaming generate), generator tracing |
 | 05 | [governance](recipes/ollama-05-governance/) | production controls: sampling, the `enabled` kill switch, redaction, capture limits, `service` / `environment` / `source` tags |
 | 06 | [cost](recipes/ollama-06-cost/) | spend tracking: `model_prices` auto-cost, `set_cost`, `set_usage` |
-| 07 | [persistence](recipes/ollama-07-persistence/) | trace files and servers: rotation (`max_bytes` / `backup_count`), `send_events` |
-| 08 | [evals](recipes/ollama-08-evals/) | the offline eval loop: `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments` |
+| 07 | [persistence](recipes/ollama-07-persistence/) | trace files and servers: rotation (`max_bytes` / `backup_count`), `send_events`, the `bir traces` / `show` / `stats` CLI |
+| 08 | [evals](recipes/ollama-08-evals/) | the offline eval loop: `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments`, the `bir experiments` / `experiment-show` / `experiment-report` CLI |
 
 ## Integration recipes (phase 2, planned)
 

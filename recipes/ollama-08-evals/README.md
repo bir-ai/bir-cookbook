@@ -132,3 +132,49 @@ cat .bir/experiments/qa-quality.summary.json
 open .bir/experiments/qa-quality.report.html
 cat .bir/datasets/qa.jsonl     # the exported dataset, one example per line
 ```
+
+## Inspect with the CLI
+
+The SDK installs a `bir` console script (also `python -m bir`), and its default
+experiments directory is exactly where this recipe writes —
+`./.bir/experiments/` — when run from this directory (`--dir` points it
+anywhere else). `bir experiments` is `list_experiments` as a table, newest
+first:
+
+```bash
+uv run bir experiments
+# ID                                    NAME          STATUS   EXAMPLES  ERRORS  SCORES
+# 73a9d014-…                            qa-candidate  success  5         0       answer_contains_citation=0.80 …
+# f80de253-…                            qa-baseline   success  5         0       answer_contains_citation=1.00 …
+# d5bd362a-…                            qa-failfast   error    1         1       -
+# e30753f6-…                            qa-quality    error    6         1       answer_contains_citation=1.00 …
+```
+
+Experiment ids are minted per run, so take them from your own `bir experiments`
+output. `bir experiment-show <id>` prints one run's summary, per-evaluator
+means, and per-example rows — the errored `e6-missing-doc` included:
+
+```bash
+uv run bir experiment-show e30753f6-1b84-456e-966a-cdb378ebf2a8
+# qa-quality (e30753f6-1b84-456e-966a-cdb378ebf2a8)
+# status=error  examples=6  errors=1
+#
+# EVALUATOR                 MEAN
+# answer_contains_citation  1.00
+# cites_right_doc           1.00
+# …
+#
+# EXAMPLE         STATUS   SCORES                              ERROR
+# e1-tracing      success  answer_contains_citation=1.00 …     -
+# …
+# e6-missing-doc  error    -                                   retrieval failed: no document with id 'docs-nonexistent'
+```
+
+`bir experiment-report <id>` is `render_experiment_report` without the Python:
+the same self-contained HTML (default) or Markdown, to stdout or `--output`:
+
+```bash
+uv run bir experiment-report e30753f6-1b84-456e-966a-cdb378ebf2a8 \
+  --format markdown --output qa-quality.cli-report.md
+# Wrote markdown report to qa-quality.cli-report.md
+```

@@ -126,3 +126,54 @@ way. Inspect the raw files with:
 ls -l .bir/            # active file, .1–.3 backups, .sent sidecar
 cat .bir/traces.jsonl* # each one valid JSONL on its own
 ```
+
+## Inspect with the CLI
+
+The SDK installs a `bir` console script (also `python -m bir`), so every
+recipe's environment already has it — and its default path is exactly this
+recipe's `./.bir/traces.jsonl` when run from this directory (`--path` points it
+anywhere else). `bir traces` lists what a load would see — and honors the same
+rotation boundary as `load_events()`: by default only the active file, with
+`--include-rotated` adding the backups:
+
+```bash
+uv run bir traces
+# START                             STATUS   DURATION  EVENTS  NAME
+# 2026-07-17T20:42:02.433076+00:00  success  1.0ms     3       journal_entry
+# 2026-07-17T20:42:02.431023+00:00  success  1.6ms     3       journal_entry
+# 2026-07-17T20:42:02.420405+00:00  success  1.5ms     1       journal_entry
+
+uv run bir traces --include-rotated   # same table, 13 traces — the backups too
+```
+
+`bir show <trace_id>` renders one trace as the indented event tree (grab an id
+from `bir traces --json`):
+
+```bash
+uv run bir show 0ab46860-fbaf-4158-91a5-f2b1a03b6f7c
+# trace journal_entry [success] 1.0ms
+#   span entry.compose [success] 0.0ms
+#   span entry.store [success] 0.0ms
+```
+
+`bir stats` aggregates counts, tokens, cost, and latency over the same
+selection:
+
+```bash
+uv run bir stats --include-rotated
+# METRIC         VALUE
+# traces         13
+# success        13
+# error          0
+# input_tokens   0
+# output_tokens  0
+# total_tokens   0
+# cost           -
+# latency_count  13
+# latency_mean   4.4ms
+# latency_p95    17.1ms
+```
+
+Zero tokens even with `--include-rotated` is part B rendered as a table: the
+run's generation traces were the oldest, so retention dropped them — rotation
+deletes, send first.

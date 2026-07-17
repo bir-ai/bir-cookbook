@@ -62,3 +62,7 @@ the raw records with:
 ```bash
 cat .bir/traces.jsonl
 ```
+
+The same file can also be browsed without any Python — the SDK ships a `bir`
+console script, so `uv run bir traces` lists it as a table (the full CLI tour
+is in [Lesson 07](../ollama-07-persistence/)).
