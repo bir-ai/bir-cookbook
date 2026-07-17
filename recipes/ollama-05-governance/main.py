@@ -2,10 +2,12 @@
 
 Lessons 01-04 recorded everything, always. Production needs dials: tag traces
 by deployment, turn recording off during an incident, keep only a sample of
-high-volume traffic, widen redaction for your own secret shapes, and cap how
-much of any one payload reaches disk. All of it lives in ``configure()``, which
-mutates one process-global config — so this lesson deliberately calls it
-several times, once per part, and prints each call as it happens.
+high-volume traffic, widen redaction for your own secret shapes, cap how much
+of any one payload reaches disk — and keep a single sensitive call's payloads
+off disk entirely while still recording the call. All but the last live in
+``configure()``, which mutates one process-global config — so this lesson
+deliberately calls it several times, once per part, and prints each call as it
+happens. The last control rides on the individual call instead.
 
 Every part self-verifies by reloading ``./.bir/traces.jsonl`` — counting the
 traces on disk before and after a part is the cleanest proof that something
@@ -29,6 +31,12 @@ was (or wasn't) recorded:
   E. capture limits — ``max_value_length`` / ``max_collection_items`` bound one
      huge payload with a visible ``…[truncated]`` marker. Truncation always
      runs AFTER redaction, so a cut can never expose part of a secret.
+  F. per-call capture override — no ``configure()`` change at all: one call
+     passes ``bir_capture_input=False`` / ``bir_capture_output=False``, which
+     the Ollama wrappers forward to ``bir.generation(capture_input=...,
+     capture_output=...)``. That generation's event, model, and token usage
+     still reach disk; its input/output payloads do not — while a baseline
+     call in the SAME trace still captures everything.
 
 Run it:
   * offline (no Ollama, no network, deterministic — what CI runs):
@@ -76,6 +84,18 @@ MAX_VALUE_LENGTH = 80
 MAX_COLLECTION_ITEMS = 3
 TRUNCATED = "…[truncated]"
 REDACTED = "[redacted]"
+
+# Part F: fake customer PII for the per-call capture override. Redaction (part
+# D) catches KNOWN secret shapes; here the whole payload is sensitive — a name
+# and an account id no pattern would flag — so capture is turned off for the
+# one call that handles it. Module-level, not a function argument, so the
+# @observe root (whose capture stays ON) never captures it either.
+SENSITIVE_CUSTOMER = "Ada Quill"
+SENSITIVE_ACCOUNT = "acct-9931-demo"
+SENSITIVE_PROMPT = (
+    f"Customer {SENSITIVE_CUSTOMER} (account {SENSITIVE_ACCOUNT}) reports that "
+    "their latest invoice failed. In one sentence, what should support check first?"
+)
 
 # Keep the client module-level so it is never passed as an @observe argument and
 # therefore never captured as an input (see CLAUDE.md).
@@ -233,9 +253,35 @@ def archive_conversation(note: str, turns: list[str]) -> dict:
     return {"note_chars": len(note), "turns": len(turns)}
 
 
+@observe(name="sensitive_answer", capture_inputs=True, capture_outputs=True)
+def sensitive_answer(model: str) -> dict:
+    # Capture is ON at this root and stays ON for the baseline call below —
+    # the override is scoped to the one sensitive call. The sensitive prompt is
+    # module-level and the return value is a sanitized summary, so neither the
+    # root's captured input nor its captured output re-records what the
+    # override kept out.
+    print(_ask("In one sentence, why might a team keep a trace but drop its payload?", model))
+
+    response = trace_ollama_chat(
+        _CLIENT.chat,
+        model=model,
+        messages=[{"role": "user", "content": SENSITIVE_PROMPT}],
+        bir_metadata={"recipe": "ollama-05-governance"},
+        bir_name="ollama.chat.sensitive",
+        # Forwarded to bir.generation(capture_input=..., capture_output=...):
+        # keep this call's event, model, and usage — but no payloads.
+        bir_capture_input=False,
+        bir_capture_output=False,
+    )
+    answer = response.message.content
+    print(f"[bir] sensitive answer (terminal only, never captured): {answer}")
+    return {"handled": True, "answer_chars": len(answer)}
+
+
 # --------------------------------------------------------------------------- #
-# The five parts. Each prints the configure() call it makes, runs traced work,
-# then reloads ./.bir/traces.jsonl and checks what did (not) reach disk.
+# The six parts. Each prints the configure() call it makes (part F pointedly
+# makes none), runs traced work, then reloads ./.bir/traces.jsonl and checks
+# what did (not) reach disk.
 # --------------------------------------------------------------------------- #
 def part_a_deployment_tags(prompt: str, model: str, trace_path: Path) -> None:
     print("\n== A · deployment tags: service_name / environment / source ==")
@@ -389,11 +435,42 @@ def part_e_capture_limits(trace_path: Path) -> None:
     print(f"[bir] captured note on disk: {captured_note!r}")
 
 
+def part_f_per_call_capture(model: str, trace_path: Path) -> None:
+    print("\n== F · per-call capture override: keep the trace, drop the payload ==")
+    print("[bir] no configure() call — global capture stays ON; the override rides on one call")
+    before = _trace_count(trace_path)
+
+    summary = sensitive_answer(model)
+    print(f"[bir] root returned (sanitized on purpose): {summary}")
+
+    traces = load_traces(trace_path)
+    _check(len(traces) == before + 1, "F: one new trace on disk")
+    events = traces[-1].events
+    baseline = next(e for e in events if e.type == "generation" and e.name == "ollama.chat")
+    sensitive = next(e for e in events if e.type == "generation" and e.name == "ollama.chat.sensitive")
+    _check(
+        baseline.input is not None and baseline.output is not None,
+        "F: the baseline generation in the SAME trace captured input and output",
+    )
+    _check(
+        sensitive.input is None and sensitive.output is None,
+        "F: the sensitive generation captured NEITHER input nor output",
+    )
+    _check(sensitive.model is not None, f"F: …but its model was still recorded ({sensitive.model})")
+    _check(bool(sensitive.usage), f"F: …and its token usage too ({sensitive.usage})")
+    raw = json.dumps([event.raw for event in events])
+    _check(
+        SENSITIVE_CUSTOMER not in raw and SENSITIVE_ACCOUNT not in raw,
+        "F: the fake customer PII appears nowhere in the raw on-disk trace",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Lesson 05 — governance: tags, kill switch, sampling, redaction, capture limits."
+        description="Lesson 05 — governance: tags, kill switch, sampling, redaction, "
+        "capture limits, per-call capture override."
     )
-    parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="Feeds parts A and B; C-E use fixed inputs.")
+    parser.add_argument("--prompt", default=DEFAULT_PROMPT, help="Feeds parts A and B; C-F use fixed inputs.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--trace-path", default=str(DEFAULT_TRACE_PATH))
     parser.add_argument(
@@ -427,6 +504,7 @@ def main() -> None:
         part_c_sampling(args.model, trace_path)
         part_d_redaction(args.model, trace_path)
         part_e_capture_limits(trace_path)
+        part_f_per_call_capture(args.model, trace_path)
     except Exception as exc:  # pragma: no cover - real-path only
         if smoke:
             raise

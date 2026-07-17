@@ -3,14 +3,15 @@
 **Phase 1, Lesson 05 of the Ollama feature tour.** Production controls: the
 same traced Ollama calls as earlier lessons, now governed — tagged by
 deployment, switchable off during an incident, sampled under volume, redacted
-beyond the built-in rules, and capped in how much of any one payload reaches
-disk.
+beyond the built-in rules, capped in how much of any one payload reaches disk,
+and — for one sensitive call — recorded without its payloads entirely.
 
-Everything here is a `configure()` argument. `configure()` mutates one
+All but the last are `configure()` arguments. `configure()` mutates one
 process-global config, so the lesson calls it several times on purpose — once
 per part, printing each call — and self-verifies every part by reloading
 `./.bir/traces.jsonl` and counting what did (or deliberately did not) get
-recorded.
+recorded. The last control (part F) rides on the individual call instead of
+the global config.
 
 ## What it shows
 
@@ -43,12 +44,21 @@ recorded.
   a visible `…[truncated]` marker; `max_collection_items` keeps a collection's
   first N items plus one marker. Truncation always runs AFTER redaction, so a
   cut can never expose part of a secret. Both default to `None` (unlimited).
+- **F · per-call capture override** — no `configure()` change at all. One call
+  handles sensitive data (a customer name and account id no redaction pattern
+  would flag), so it passes `bir_capture_input=False` /
+  `bir_capture_output=False` to the wrapper — the `bir_`-prefixed params map
+  straight to `bir.generation(capture_input=..., capture_output=...)` and
+  override the global capture config for that single call. The reloaded trace
+  shows that generation with no input/output payloads but its event, model,
+  and token usage intact — while a baseline call in the SAME trace captured
+  everything. Keep the trace, not the payload.
 
 ## Key
 
 **None.** Ollama runs locally and is keyless — there is no API key and no `.env`
-to fill in. The "secrets" in Part D are fake by construction and exist only to
-be redacted.
+to fill in. The "secrets" in Part D and the "customer PII" in Part F are fake
+by construction and exist only to be kept off disk.
 
 ## Run it
 
@@ -61,7 +71,7 @@ ollama pull llama3.2:1b
 uv run python main.py --prompt "Why tag traces with an environment?"
 ```
 
-Flags: `--prompt` (feeds parts A and B; C–E use fixed inputs), `--model`
+Flags: `--prompt` (feeds parts A and B; C–F use fixed inputs), `--model`
 (default `llama3.2:1b`), `--trace-path`, `--smoke` (also `BIR_COOKBOOK_SMOKE=1`).
 The statistical kept-count in part C varies run to run; every `✓` check is
 deterministic.
@@ -95,6 +105,15 @@ deterministic.
 == E · capture limits: bound one huge payload, redact before the cut ==
 [bir] ✓ E: string capped at 80 chars of redacted text + '…[truncated]'
 [bir] ✓ E: redaction ran BEFORE the cut — no fragment of the token survived
+
+== F · per-call capture override: keep the trace, drop the payload ==
+[bir] no configure() call — global capture stays ON; the override rides on one call
+[bir] sensitive answer (terminal only, never captured): …
+[bir] ✓ F: the baseline generation in the SAME trace captured input and output
+[bir] ✓ F: the sensitive generation captured NEITHER input nor output
+[bir] ✓ F: …but its model was still recorded (llama3.2:1b)
+[bir] ✓ F: …and its token usage too ({'input_tokens': 19, 'output_tokens': 31, 'total_tokens': 50})
+[bir] ✓ F: the fake customer PII appears nowhere in the raw on-disk trace
 
 [bir] all governance checks passed — traces on disk: …
 [bir] wrote ./.bir/traces.jsonl
