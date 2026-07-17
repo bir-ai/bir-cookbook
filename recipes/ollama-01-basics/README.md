@@ -1,7 +1,8 @@
 # Ollama · Lesson 01 — basics
 
 **Phase 1, Lesson 01 of the Ollama feature tour.** Your first traced Ollama
-call: make ONE real, local chat call and record it as a Bir trace.
+calls: make one real, local call on each sync surface — `chat` and `generate` —
+and record both in a single Bir trace.
 
 This is the smallest possible slice of the SDK — just enough to see a trace on
 disk. Later lessons add spans, tool calls, retrieval, prompts, governance, cost,
@@ -11,11 +12,16 @@ persistence, and evals.
 
 - `configure(trace_path=..., capture_inputs=True, capture_outputs=True)` writing
   to the recipe-local `./.bir/traces.jsonl`.
-- An `@observe`-decorated function that makes one Ollama chat call wrapped with
-  `bir.integrations.ollama.trace_chat` (imported here as `trace_ollama_chat`),
-  recorded as a Bir **generation** with the model and token usage.
+- An `@observe`-decorated function that makes one call on each sync Ollama
+  surface, each recorded as a Bir **generation** with the model and token usage:
+  a chat call wrapped with `bir.integrations.ollama.trace_chat` (imported here
+  as `trace_ollama_chat`) and a generate call wrapped with `trace_generate`
+  (imported as `trace_ollama_generate`).
+- The two surfaces' different response shapes: chat answers at
+  `message.content`, generate at `response`; both report token usage at the
+  top-level `prompt_eval_count` / `eval_count`.
 - `load_traces(...)` afterward — the script prints the `trace_id`, event count,
-  model, and token usage so a run is self-verifying.
+  and each generation's model and token usage so a run is self-verifying.
 
 ## Key
 
@@ -43,12 +49,15 @@ If Ollama isn't reachable, the real run exits with a message pointing you to
 
 ```
 [bir] trace_id=...
-[bir] events=2  model=llama3.2:1b  usage: in=… out=… total=…
+[bir] events=3
+[bir] generation ollama.chat      model=llama3.2:1b  usage: in=… out=… total=…
+[bir] generation ollama.generate  model=llama3.2:1b  usage: in=… out=… total=…
 [bir] wrote ./.bir/traces.jsonl
 ```
 
-Two events: the `@observe` trace root (`ollama_basics`) and the `generation`
-(`ollama.chat`) nested inside it. Inspect the raw records with:
+Three events: the `@observe` trace root (`ollama_basics`) and the two
+`generation`s (`ollama.chat` and `ollama.generate`) nested inside it. Inspect
+the raw records with:
 
 ```bash
 cat .bir/traces.jsonl

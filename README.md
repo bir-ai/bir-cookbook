@@ -36,7 +36,7 @@ tracking, whole eval experiments. All eight lessons are implemented.
 
 | # | Lesson | Covers |
 | --- | --- | --- |
-| 01 | [basics](recipes/ollama-01-basics/) | your first traced call: `configure`, `@observe`, a `generation` via `trace_ollama_chat`, `load_traces` |
+| 01 | [basics](recipes/ollama-01-basics/) | your first traced calls: `configure`, `@observe`, a `generation` via each of `trace_ollama_chat` and `trace_generate`, `load_traces` |
 | 02 | [structure](recipes/ollama-02-structure/) | nested work and the RAG shape: `trace` / `span`, `tool_call`, `retrieval`, `score` |
 | 03 | [prompts](recipes/ollama-03-prompts/) | prompt versioning and log correlation: `prompt()`, `generation(..., prompt=)`, `get_current_trace_id` / `get_current_span_id`, the logging filter |
 | 04 | [async-streaming](recipes/ollama-04-async-streaming/) | async `@observe`, streaming generations, generator tracing |

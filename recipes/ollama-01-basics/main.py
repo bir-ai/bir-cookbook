@@ -1,15 +1,20 @@
-"""Phase 1 · Lesson 01 — basics: your first traced Ollama call.
+"""Phase 1 · Lesson 01 — basics: your first traced Ollama calls.
 
-Make ONE real, local Ollama chat call and record it as a Bir trace. This is the
-simplest lesson in the tour; later lessons add spans, tools, retrieval, evals,
-and governance. Here we exercise exactly this slice of the SDK:
+Make one real, local Ollama call on each sync surface — ``chat`` and
+``generate`` — and record both in a single Bir trace. This is the simplest
+lesson in the tour; later lessons add spans, tools, retrieval, evals, and
+governance. Here we exercise exactly this slice of the SDK:
 
   * ``configure(trace_path=..., capture_inputs=True, capture_outputs=True)`` ->
     write the recipe-local ``./.bir/traces.jsonl``.
-  * an ``@observe``-decorated function that makes one Ollama chat call wrapped
-    with ``trace_ollama_chat(...)`` so it is recorded as a Bir ``generation``.
-  * ``load_traces(...)`` afterward -> print the trace_id, event count, model,
-    and token usage so the run is self-verifying.
+  * an ``@observe``-decorated function that makes one ``chat`` call wrapped with
+    ``trace_ollama_chat(...)`` and one ``generate`` call wrapped with
+    ``trace_ollama_generate(...)``, each recorded as a Bir ``generation``. The
+    two surfaces answer differently: chat puts the text at ``message.content``,
+    generate at ``response``; both report usage at the top-level
+    ``prompt_eval_count`` / ``eval_count``.
+  * ``load_traces(...)`` afterward -> print the trace_id, event count, and each
+    generation's model and token usage so the run is self-verifying.
 
 Run it:
   * offline (no Ollama, no network, deterministic — what CI runs):
@@ -29,6 +34,7 @@ from pathlib import Path
 
 from bir import configure, load_traces, observe
 from bir.integrations.ollama import trace_chat as trace_ollama_chat
+from bir.integrations.ollama import trace_generate as trace_ollama_generate
 
 DEFAULT_TRACE_PATH = Path(__file__).resolve().parent / ".bir" / "traces.jsonl"
 DEFAULT_MODEL = "llama3.2:1b"
@@ -40,11 +46,13 @@ _CLIENT = None
 
 
 # --------------------------------------------------------------------------- #
-# Offline fake — only used with --smoke. It mirrors the shape the Ollama wrapper
-# reads from a real response: ``model``, the assistant text at
-# ``message.content``, and token usage at ``prompt_eval_count`` / ``eval_count``.
-# The real ``ollama.ChatResponse`` is a pydantic model exposing ``model_dump``,
-# so the fake provides one too — that is the path ``_response_output`` takes.
+# Offline fake — only used with --smoke. It mirrors the shapes the Ollama
+# wrappers read from real responses: ``model`` plus the text at
+# ``message.content`` (chat) or ``response`` (generate), and token usage at the
+# top-level ``prompt_eval_count`` / ``eval_count`` for both. The real
+# ``ollama.ChatResponse``/``GenerateResponse`` are pydantic models exposing
+# ``model_dump``, so the fakes provide one too — that is the path
+# ``_response_output`` takes.
 # --------------------------------------------------------------------------- #
 class _FakeMessage:
     def __init__(self, role: str, content: str) -> None:
@@ -79,6 +87,27 @@ class _FakeChatResponse:
         }
 
 
+class _FakeGenerateResponse:
+    def __init__(self, *, model: str, response: str, prompt_eval_count: int, eval_count: int) -> None:
+        self.model = model
+        self.response = response
+        self.prompt_eval_count = prompt_eval_count
+        self.eval_count = eval_count
+        self.done = True
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def model_dump(self) -> dict:
+        return {
+            "model": self.model,
+            "response": self.response,
+            "prompt_eval_count": self.prompt_eval_count,
+            "eval_count": self.eval_count,
+            "done": self.done,
+        }
+
+
 class _FakeOllamaClient:
     """Deterministic stand-in for ``ollama.Client`` used only in --smoke mode."""
 
@@ -90,6 +119,15 @@ class _FakeOllamaClient:
             content=content,
             prompt_eval_count=sum(len(m["content"].split()) for m in messages),
             eval_count=len(content.split()),
+        )
+
+    def generate(self, *, model: str, prompt: str, **_kwargs) -> _FakeGenerateResponse:
+        response = f"(smoke) Generate completes raw prompts. You asked: {prompt}"
+        return _FakeGenerateResponse(
+            model=model,
+            response=response,
+            prompt_eval_count=len(prompt.split()),
+            eval_count=len(response.split()),
         )
 
 
@@ -121,24 +159,38 @@ def _build_client(smoke: bool):
 
 
 @observe(name="ollama_basics", capture_inputs=True, capture_outputs=True)
-def answer(prompt: str, model: str) -> str:
-    """Make one Ollama chat call, recorded as a Bir generation via the wrapper."""
+def answer(prompt: str, model: str) -> dict[str, str]:
+    """Make one chat and one generate call, each recorded as a Bir generation."""
 
-    # trace_ollama_chat takes the chat callable first, then forwards everything
-    # else to Ollama unchanged; ``model`` selects the model, ``messages`` carries
-    # the prompt. The client is read from module scope, never a captured input.
-    response = trace_ollama_chat(
+    # Each wrapper takes the Ollama callable first, then forwards everything
+    # else to Ollama unchanged; ``model`` selects the model. The client is read
+    # from module scope, never a captured input.
+    chat_response = trace_ollama_chat(
         _CLIENT.chat,
         model=model,
         messages=[{"role": "user", "content": prompt}],
         bir_metadata={"recipe": "ollama-01-basics"},
     )
-    return response.message.content
+
+    # Ollama's second sync surface: ``generate`` takes a raw ``prompt`` instead
+    # of ``messages`` and answers with the completion text at ``response``
+    # (not ``message.content``). Usage stays top-level for both surfaces.
+    generate_response = trace_ollama_generate(
+        _CLIENT.generate,
+        model=model,
+        prompt=prompt,
+        bir_metadata={"recipe": "ollama-01-basics"},
+    )
+
+    return {
+        "chat": chat_response.message.content,
+        "generate": generate_response.response,
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Lesson 01 — record a Bir trace for one local Ollama chat call."
+        description="Lesson 01 — record one local Ollama chat and generate call in a Bir trace."
     )
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -159,7 +211,7 @@ def main() -> None:
     _CLIENT = _build_client(smoke)
 
     try:
-        text = answer(args.prompt, args.model)
+        answers = answer(args.prompt, args.model)
     except Exception as exc:  # pragma: no cover - real-path only
         if smoke:
             raise
@@ -169,19 +221,20 @@ def main() -> None:
             f"(`ollama pull {args.model}`), or run with --smoke."
         ) from exc
 
-    print(text)
+    print(f"chat:     {answers['chat']}")
+    print(f"generate: {answers['generate']}")
 
     # Reload from disk and summarize so the run is self-verifying.
     latest = load_traces(trace_path)[-1]
-    gen = next((event for event in latest.events if event.type == "generation"), None)
-    model_name = gen.model if gen is not None else args.model
-    usage = (gen.usage if gen is not None else None) or {}
     print(f"\n[bir] trace_id={latest.id}")
-    print(
-        f"[bir] events={len(latest.events)}  model={model_name}  "
-        f"usage: in={usage.get('input_tokens')} "
-        f"out={usage.get('output_tokens')} total={usage.get('total_tokens')}"
-    )
+    print(f"[bir] events={len(latest.events)}")
+    for gen in (event for event in latest.events if event.type == "generation"):
+        usage = gen.usage or {}
+        print(
+            f"[bir] generation {gen.name:<16} model={gen.model}  "
+            f"usage: in={usage.get('input_tokens')} "
+            f"out={usage.get('output_tokens')} total={usage.get('total_tokens')}"
+        )
     print(f"[bir] wrote {trace_path}")
 
 
