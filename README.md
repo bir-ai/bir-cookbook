@@ -1,114 +1,95 @@
 # Bir Cookbook
 
-Hands-on recipes for the [**bir-sdk**](https://github.com/bir-ai/bir-python)
-tracing / observability SDK (import name `bir`), built to teach **how you
-actually use the SDK and every one of its features** — against **real, free,
-local LLM calls** via [Ollama](https://ollama.com).
+Runnable recipes for [bir-sdk](https://github.com/bir-ai/bir-python), a tracing
+and observability SDK for LLM applications (import name `bir`). Every recipe
+runs against a free provider, starting with local [Ollama](https://ollama.com),
+so you can work through the entire SDK without an API key or a usage bill.
 
-The SDK's own repo ships deliberately minimal, offline regression examples. This
-cookbook is the teaching layer: runnable, real, and progressive.
+The SDK repo keeps its own examples minimal and offline. This cookbook is the
+teaching layer: each recipe is a small script you can run, read, and copy from.
 
----
+## Quick start
 
-## Two phases, in order
+You need [uv](https://docs.astral.sh/uv/); each recipe is its own uv project.
 
-### Phase 1 — Feature tour on Ollama  ← the focus
+```bash
+cd recipes/ollama-01-basics
 
-A **progressive, numbered series** that exercises the *full* SDK surface against
-real local Ollama calls. Ollama is free, local, keyless, and unlimited — ideal
-for exhaustive demos (many calls, sampling, whole eval experiments) with no cost
-or rate limits. Each lesson is one runnable script that also has an offline
-`--smoke` path for CI.
+# Offline mode: a deterministic in-file fake stands in for Ollama.
+# No model, no network, no key.
+uv run python main.py --smoke
 
-### Phase 2 — Free integration recipes  (later)
+# Real mode: needs a local Ollama server and a small model.
+ollama pull llama3.2:1b
+uv run python main.py
+```
 
-Thin per-provider recipes showing how to wire each SDK **integration** (Gemini,
-Mistral, Groq, CrewAI, LlamaIndex, …) using **free** providers. These come
-*after* the tour on purpose: their only job is the integration wiring — the SDK
-features themselves are already taught in Phase 1.
+Every recipe writes traces to a local `./.bir/traces.jsonl` and prints the
+`trace_id`, event count, model, and token usage, so a run verifies itself.
 
-> **Status:** Phase 1 is **complete** — all eight lessons of the Ollama feature
-> tour ([`ollama-01-basics`](recipes/ollama-01-basics/),
-> [`ollama-02-structure`](recipes/ollama-02-structure/),
-> [`ollama-03-prompts`](recipes/ollama-03-prompts/),
-> [`ollama-04-async-streaming`](recipes/ollama-04-async-streaming/),
-> [`ollama-05-governance`](recipes/ollama-05-governance/),
-> [`ollama-06-cost`](recipes/ollama-06-cost/),
-> [`ollama-07-persistence`](recipes/ollama-07-persistence/),
-> [`ollama-08-evals`](recipes/ollama-08-evals/)) are implemented.
-> Next up: Phase 2, the free integration recipes.
+## The Ollama feature tour
 
----
+The core of the cookbook is a numbered series of eight lessons that covers the
+full SDK surface in order. Ollama is local, keyless, and unlimited, which makes
+it a good fit for the more exhaustive demos: many calls, sampling, cost
+tracking, whole eval experiments. All eight lessons are implemented.
 
-## Roadmap
+| # | Lesson | Covers |
+| --- | --- | --- |
+| 01 | [basics](recipes/ollama-01-basics/) | your first traced call: `configure`, `@observe`, a `generation` via `trace_ollama_chat`, `load_traces` |
+| 02 | [structure](recipes/ollama-02-structure/) | nested work and the RAG shape: `trace` / `span`, `tool_call`, `retrieval`, `score` |
+| 03 | [prompts](recipes/ollama-03-prompts/) | prompt versioning and log correlation: `prompt()`, `generation(..., prompt=)`, `get_current_trace_id` / `get_current_span_id`, the logging filter |
+| 04 | [async-streaming](recipes/ollama-04-async-streaming/) | async `@observe`, streaming generations, generator tracing |
+| 05 | [governance](recipes/ollama-05-governance/) | production controls: sampling, the `enabled` kill switch, redaction, capture limits, `service` / `environment` / `source` tags |
+| 06 | [cost](recipes/ollama-06-cost/) | spend tracking: `model_prices` auto-cost, `set_cost`, `set_usage` |
+| 07 | [persistence](recipes/ollama-07-persistence/) | trace files and servers: rotation (`max_bytes` / `backup_count`), `send_events` |
+| 08 | [evals](recipes/ollama-08-evals/) | the offline eval loop: `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments` |
 
-### Phase 1 — Ollama feature tour
+## Integration recipes (phase 2, planned)
 
-Each lesson is one self-contained, runnable recipe (with `--smoke`). Together
-they cover essentially the whole SDK surface.
+With the tour as the reference for SDK features, a second set of recipes will
+show only the wiring for each SDK integration, still on free providers:
 
-| # | Lesson | What it teaches | SDK surface exercised |
-| --- | --- | --- | --- |
-| 01 | [basics](recipes/ollama-01-basics/) ✅ | your first traced Ollama call | `configure`, `@observe`, `generation` (via `trace_ollama_chat`), `load_traces` |
-| 02 | [structure](recipes/ollama-02-structure/) ✅ | nested work + the RAG shape | `trace` / `span`, `tool_call`, `retrieval` (`add_document`/`set_documents`), `score` |
-| 03 | [prompts & correlation](recipes/ollama-03-prompts/) ✅ | prompt versioning + log linking | `prompt()` (templates/versions), `generation(..., prompt=)`, `get_current_trace_id` / `get_current_span_id`, `bir.logging.install_trace_id_filter` |
-| 04 | [async, streaming, generators](recipes/ollama-04-async-streaming/) ✅ | non-blocking + token streaming | async `@observe`, streaming generation, generator tracing |
-| 05 | [governance](recipes/ollama-05-governance/) ✅ | production controls | `sample_rate` / `sample_rules`, `enabled` kill-switch, redaction (`additional_secret_keys` / `additional_redaction_patterns`), capture limits, `service` / `environment` / `source` tags |
-| 06 | [cost](recipes/ollama-06-cost/) ✅ | spend tracking | `model_prices` auto-cost, `set_cost`, `set_usage` |
-| 07 | [persistence](recipes/ollama-07-persistence/) ✅ | files + server | file rotation (`max_bytes` / `backup_count`), `send_events` to a Bir server |
-| 08 | [evals](recipes/ollama-08-evals/) ✅ | the offline eval loop | `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments` |
+- Providers: Gemini, Mistral, Cohere, and Groq / OpenRouter through the
+  OpenAI-compatible client or litellm.
+- Frameworks on a free model: LlamaIndex, CrewAI, Haystack, AutoGen,
+  OpenAI Agents, Pydantic AI, DSPy, Instructor.
+- Exporters: OTLP via `export_traces_to_otlp`.
 
-### Phase 2 — Free integration recipes (after the tour)
+Paid-only providers (Anthropic, AWS Bedrock, Vertex AI) are out of scope, so
+that everything in this repo stays free to run.
 
-- **Provider wrappers:** `mistral`, `google` / Gemini, `cohere`, Groq / OpenRouter
-  via `openai` + `base_url` or `litellm`, `ollama`.
-- **Frameworks on a free model:** `llamaindex`, `crewai`, `haystack`, `autogen`,
-  `openai_agents`, `pydantic_ai`, `dspy`, `instructor`.
-- **Exporter / other:** `otel` (`export_traces_to_otlp`), a real-dependency
-  `evals` recipe.
-- **Out of scope (paid-only):** Anthropic, AWS Bedrock, Vertex AI — excluded so
-  every recipe stays free to run.
+## Smoke mode
 
----
+Every entry script supports `--smoke` (or `BIR_COOKBOOK_SMOKE=1`). In smoke
+mode the provider client is replaced by a small deterministic fake defined in
+the script itself, so the tracing wiring is tested with no network, no key, and
+no Ollama install. CI runs every recipe this way; the live Ollama path is
+local-only.
 
-## Prerequisites
-
-- [`uv`](https://docs.astral.sh/uv/) — each recipe is its own uv project.
-- For **real** Ollama runs: install [Ollama](https://ollama.com) and pull a small
-  model, e.g. `ollama pull llama3.2:1b`. The offline `--smoke` path needs neither
-  Ollama nor a model.
-
-## The `--smoke` contract
-
-**Every recipe's entry script supports `--smoke` (or `BIR_COOKBOOK_SMOKE=1`).**
-In smoke mode the recipe uses a tiny, deterministic **in-file fake** of the
-provider client — no server, no network — so the *Bir tracing wiring* is
-regression-tested in CI without a running Ollama. Ollama's live path is
-**local-only** (CI has no Ollama server, so CI runs `--smoke`).
-
-## Layout
+## Repository layout
 
 ```
 recipes/
-├── _template/         # copy-to-start scaffold for a new lesson/recipe
-└── <lesson-or-recipe>/
-    ├── main.py        # runnable; supports --smoke
-    ├── pyproject.toml # uv project; deps = ["bir-sdk==0.3.0", …]
+├── _template/         # scaffold to copy when adding a recipe
+└── <recipe>/
+    ├── main.py        # runnable entry point, supports --smoke
+    ├── pyproject.toml # uv project, pins bir-sdk==0.3.0
     ├── README.md
     └── .env.example
 ```
 
-`scripts/smoke.py` discovers recipes and runs each one's `--smoke` path (it also
-feeds the CI matrix via `--list`). Folders starting with `_` are scaffolding and
-are skipped.
+`scripts/smoke.py` discovers recipes and runs each one's smoke path; CI builds
+its matrix from `scripts/smoke.py --list`. Folders starting with `_` are
+scaffolding and are skipped.
 
-## Versioning & drift
+## Versioning
 
-Recipes pin **`bir-sdk==0.3.0`**. CI additionally runs a **nightly** leg that
-installs the SDK from `main` (`git+https://github.com/bir-ai/bir-python@main`)
-and re-runs every recipe's smoke path, so upstream API drift is caught here
-before it reaches users. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Recipes pin `bir-sdk==0.3.0`. A nightly CI leg reinstalls the SDK from its
+`main` branch and re-runs every smoke path, so upstream API drift is caught
+here before it reaches users. See
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## License
 
-[Apache-2.0](LICENSE), matching `bir-sdk`.
+[Apache-2.0](LICENSE), same as bir-sdk.
