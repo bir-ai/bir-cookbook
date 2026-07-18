@@ -8,7 +8,8 @@ counterpart `run_experiment_async`) persisting one JSONL row per example plus a
 `.summary.json` sidecar, `render_experiment_report` for a shareable report,
 `compare_experiments` as the regression gate a CI job can key on, and
 `send_experiment` to ship a finished run to a Bir server (a loopback fake here,
-as in Lesson 07).
+as in Lesson 07). It closes with `bir.testing.capture_traces`, pointing the
+same assert-on-it discipline at your instrumentation itself.
 
 The model's prose differs between smoke and real runs, so every asserted check
 keys on structure the *task's code* controls — the `[doc-id]` citation the code
@@ -90,6 +91,18 @@ fields your evaluators judge.
   persisted row (the error row included), the POSTed summary equals the local
   sidecar exactly, and a scripted 503 shows the same transient-failure retry
   loop `send_events` uses.
+- **H · `bir.testing.capture_traces`** — unit-test your *instrumentation* the
+  way the rest of the lesson evals your *outputs*. `capture_traces()` redirects
+  trace writes to a private temp file for one `with` block — only *where*
+  events go changes; capture flags, sampling, and redaction stay as configured
+  — and yields a read-back handle: `events()` reads live during the block
+  (write order, so children appear before their trace root) and returns a
+  snapshot after it; `traces()` groups the same events root-first. The lesson
+  runs its own task inside the block and asserts the generation was recorded
+  under its `bir_name` with the run's model and derived token usage, then
+  verifies the isolation: the temp file is gone, the recipe's `traces.jsonl`
+  gained nothing, and the prior `configure(...)` — the recipe's own trace path
+  included — is restored on exit.
 
 ## Key
 
@@ -157,6 +170,13 @@ output — the lesson asserts exact counts), `--smoke` (also
 [bir] send_experiment('qa-quality.jsonl') -> accepted=6 experiment_id=…
 [bir] ✓ G: SendExperimentResult echoes the run's id; accepted counts every persisted row, the error row included
 [bir] ✓ G: the scripted 503 cost one attempt, the retry succeeded — exactly two POSTs on the wire
+
+== H · capture_traces: unit-test your instrumentation ==
+[bir] ✓ H: events() reads live inside the block and the snapshot after — in write order, children close first
+[bir] captured generation: name=chat.grounded_answer model=llama3.2:1b usage={'input_tokens': 41, 'output_tokens': 10, 'total_tokens': 51}
+[bir] ✓ H: the task recorded one generation under its bir_name, with the run's model
+[bir] ✓ H: isolation held — the temp file is gone and the recipe's traces.jsonl gained nothing
+[bir] capture_traces: 2 events asserted in isolation; traces.jsonl still holds 18 experiment traces
 
 [bir] all eval checks passed — 5 experiments, 18 experiment traces
 [bir] trace_id=…  events=10  model=llama3.2:1b  usage={…}

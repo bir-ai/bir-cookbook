@@ -13,7 +13,7 @@ appends, the ``{"answer", "contexts"}`` mapping it builds — never on live mode
 text. That is also the lesson's design advice: let code, not the model, own the
 fields your evaluators judge.
 
-Seven parts, each self-verified by reloading what was persisted (every asserted
+Eight parts, each self-verified by reloading what was persisted (every asserted
 check is deterministic in both modes):
 
   A. datasets — build a ``Dataset`` in code (an example's ``input`` mapping
@@ -57,6 +57,15 @@ check is deterministic in both modes):
      loopback fake speaks the exact wire protocol — POST ``/v1/experiments``
      answering ``{"accepted", "id"}`` — in BOTH modes; a scripted 503 shows
      the same retry loop ``send_events`` uses.
+  H. capture_traces — unit-test your INSTRUMENTATION the way parts A–G eval
+     your outputs: ``bir.testing.capture_traces`` redirects trace writes to a
+     private temp file for one ``with`` block (every other configured setting
+     is kept) and yields a handle whose ``events()``/``traces()`` read live
+     during the block and return a snapshot after it. The lesson's own task
+     runs inside the block and is asserted to record one generation with the
+     right ``bir_name``, model, and token usage — while the recipe's real
+     ``traces.jsonl`` gains nothing and the prior ``configure(...)`` is
+     restored on exit.
 
 Run it:
   * offline (no Ollama, no network, deterministic — what CI runs):
@@ -82,7 +91,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from bir import configure, load_traces
+from bir import configure, load_traces, trace
 from bir.evals import (
     Dataset,
     DatasetExample,
@@ -114,6 +123,7 @@ from bir.integrations.ollama import (
     trace_chat as trace_ollama_chat,
     trace_chat_async as trace_ollama_chat_async,
 )
+from bir.testing import capture_traces
 
 DEFAULT_TRACE_PATH = Path(__file__).resolve().parent / ".bir" / "traces.jsonl"
 DEFAULT_MODEL = "llama3.2:1b"
@@ -1048,10 +1058,63 @@ def part_g_send_experiment(result, experiments_dir: Path) -> None:
         server.stop()
 
 
+def part_h_capture_traces(trace_path: Path) -> None:
+    print("\n== H · capture_traces: unit-test your instrumentation ==")
+    # Parts A–G scored the task's OUTPUTS; this scores its TRACES. In a real
+    # test suite the with-block below is the body of a pytest function:
+    # capture_traces() swaps the active trace_path to a private temp file for
+    # the block and restores the previous configure(...) in full on exit. Only
+    # WHERE events are written changes — capture flags, sampling, and redaction
+    # stay as configured — so a captured event is exactly what a real
+    # traces.jsonl write would contain.
+    traces_before = len(load_traces(trace_path))
+
+    with capture_traces() as captured:
+        with trace("test.answer_with_sources"):
+            answer_with_sources(question="What does a trace record?", doc_id="docs-tracing")
+        live_types = [event.type for event in captured.events()]  # live mid-block read
+
+    events = captured.events()  # after the block: the exit snapshot
+    _check(
+        live_types == [event.type for event in events] == ["generation", "trace"],
+        "H: events() reads live inside the block and the snapshot after — in write order, children close first",
+    )
+    gen = next(event for event in events if event.type == "generation")
+    print(f"[bir] captured generation: name={gen.name} model={gen.model} usage={gen.usage}")
+    _check(
+        gen.name == "chat.grounded_answer" and gen.model == _MODEL,
+        "H: the task recorded one generation under its bir_name, with the run's model",
+    )
+    usage = gen.usage or {}
+    _check(
+        usage.get("input_tokens", 0) > 0
+        and usage.get("output_tokens", 0) > 0
+        and usage.get("total_tokens") == usage["input_tokens"] + usage["output_tokens"],
+        "H: token usage was recorded, with the total derived from its halves",
+    )
+    (captured_trace,) = captured.traces()
+    _check(
+        captured_trace.name == "test.answer_with_sources"
+        and captured_trace.status == "success"
+        and [event.type for event in captured_trace.events] == ["trace", "generation"],
+        "H: traces() groups the same events into one successful trace, root first",
+    )
+    _check(
+        captured.trace_path != trace_path
+        and not captured.trace_path.exists()
+        and len(load_traces(trace_path)) == traces_before,
+        "H: isolation held — the temp file is gone and the recipe's traces.jsonl gained nothing",
+    )
+    print(
+        f"[bir] capture_traces: {len(events)} events asserted in isolation; "
+        f"{trace_path.name} still holds {traces_before} experiment traces"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Lesson 08 — evals: datasets, evaluators, run_experiment(_async), reports, "
-        "compare_experiments, and send_experiment."
+        "compare_experiments, send_experiment, and bir.testing.capture_traces."
     )
     parser.add_argument(
         "--prompt",
@@ -1093,6 +1156,7 @@ def main() -> None:
         part_e_regression_gate(gate_dataset, experiments_dir)
         part_f_run_experiment_async(dataset, experiments_dir, trace_path)
         part_g_send_experiment(result, experiments_dir)
+        part_h_capture_traces(trace_path)
     except Exception as exc:  # pragma: no cover - real-path only
         if smoke:
             raise
