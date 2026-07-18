@@ -72,7 +72,7 @@ uv run python main.py --prompt "Why tag traces with an environment?"
 ```
 
 Flags: `--prompt` (feeds parts A and B; C–F use fixed inputs), `--model`
-(default `llama3.2:1b`), `--trace-path`, `--smoke` (also `BIR_COOKBOOK_SMOKE=1`).
+(default: the `cookbook.env` model), `--trace-path`, `--smoke` (also `BIR_COOKBOOK_SMOKE=1`).
 The statistical kept-count in part C varies run to run; every `✓` check is
 deterministic.
 

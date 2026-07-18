@@ -43,7 +43,7 @@ ollama pull llama3.2:1b
 uv run python main.py --prompt "Why version prompts at all?"
 ```
 
-Flags: `--prompt`, `--model` (default `llama3.2:1b`), `--trace-path`, `--smoke`
+Flags: `--prompt`, `--model` (default: the `cookbook.env` model), `--trace-path`, `--smoke`
 (also `BIR_COOKBOOK_SMOKE=1`).
 
 ## What you'll see

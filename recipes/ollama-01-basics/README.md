@@ -39,7 +39,7 @@ ollama pull llama3.2:1b
 uv run python main.py --prompt "In one sentence, what is LLM observability?"
 ```
 
-Flags: `--prompt`, `--model` (default `llama3.2:1b`), `--trace-path`, `--smoke`
+Flags: `--prompt`, `--model` (default: the `cookbook.env` model), `--trace-path`, `--smoke`
 (also `BIR_COOKBOOK_SMOKE=1`).
 
 If Ollama isn't reachable, the real run exits with a message pointing you to

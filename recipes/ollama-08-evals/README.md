@@ -122,7 +122,7 @@ uv run python main.py --prompt "In one sentence, what does a trace record?"
 ```
 
 Flags: `--prompt` (seeds the question of the first dataset example; the rest is
-fixed), `--model` (default `llama3.2:1b`, the task's model), `--trace-path`
+fixed), `--model` (default: the `cookbook.env` model, the task's model), `--trace-path`
 (**cleared at startup**, along with the sibling `experiments/` and `datasets/`
 output — the lesson asserts exact counts), `--smoke` (also
 `BIR_COOKBOOK_SMOKE=1`).

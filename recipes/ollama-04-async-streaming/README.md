@@ -51,7 +51,7 @@ uv run python main.py --prompt "Why show an answer word by word?"
 ```
 
 Flags: `--prompt` (feeds the streaming parts; part A asks two fixed questions
-concurrently), `--model` (default `llama3.2:1b`), `--trace-path`, `--smoke`
+concurrently), `--model` (default: the `cookbook.env` model), `--trace-path`, `--smoke`
 (also `BIR_COOKBOOK_SMOKE=1`).
 
 ## What you'll see

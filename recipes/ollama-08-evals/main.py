@@ -126,7 +126,28 @@ from bir.integrations.ollama import (
 from bir.testing import capture_traces
 
 DEFAULT_TRACE_PATH = Path(__file__).resolve().parent / ".bir" / "traces.jsonl"
-DEFAULT_MODEL = "llama3.2:1b"
+
+
+def _default_model() -> str:
+    # The whole tour runs on one local model, named once in cookbook.env at
+    # the repo root — edit that single line (and `ollama pull` the new model)
+    # to rerun every lesson on it. Precedence: --model flag > OLLAMA_MODEL
+    # env var > cookbook.env > this built-in fallback.
+    from_env = os.environ.get("OLLAMA_MODEL")
+    if from_env:
+        return from_env
+    for parent in Path(__file__).resolve().parents:
+        config = parent / "cookbook.env"
+        if config.is_file():
+            for line in config.read_text().splitlines():
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "OLLAMA_MODEL" and value.strip():
+                    return value.strip()
+            break
+    return "llama3.2:1b"
+
+
+DEFAULT_MODEL = _default_model()
 DEFAULT_PROMPT = "In one sentence, what does a trace record?"
 
 # The tiny corpus the task retrieves from. Retrieval is a plain dict lookup so

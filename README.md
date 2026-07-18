@@ -27,6 +27,11 @@ uv run python main.py
 Every recipe writes traces to a local `./.bir/traces.jsonl` and prints the
 `trace_id`, event count, model, and token usage, so a run verifies itself.
 
+All lessons read their default model from [`cookbook.env`](cookbook.env) at
+the repo root (initially `llama3.2:1b`). To run the whole tour on a different
+local model, edit that one line and pull the model; a recipe's `--model` flag
+or an `OLLAMA_MODEL` env var still overrides it per run.
+
 ## The Ollama feature tour
 
 The core of the cookbook is a numbered series of eight lessons that covers the

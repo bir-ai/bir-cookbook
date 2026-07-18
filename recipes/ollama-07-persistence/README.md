@@ -70,7 +70,7 @@ uv run python main.py --prompt "Why rotate log files?"
 ```
 
 Flags: `--prompt` (feeds the first real chat call; the rest is fixed),
-`--model` (default `llama3.2:1b`), `--trace-path` (**cleared at startup**,
+`--model` (default: the `cookbook.env` model), `--trace-path` (**cleared at startup**,
 including `.N` backups and the `.sent` sidecar — the lesson's accounting needs
 a clean slate), `--smoke` (also `BIR_COOKBOOK_SMOKE=1`).
 
