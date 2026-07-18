@@ -241,6 +241,18 @@ def _build_clients(smoke: bool):
     return client, AsyncClient()
 
 
+def _fresh_async_client(smoke: bool):
+    # An httpx-backed AsyncClient binds its connection pool to the event loop
+    # it first runs in, and every asyncio.run() opens (and closes) its own
+    # loop — so a client carried over from a previous asyncio.run() fails with
+    # "Event loop is closed". One async client per loop.
+    if smoke:
+        return _FakeAsyncOllamaClient()
+    from ollama import AsyncClient
+
+    return AsyncClient()
+
+
 # --------------------------------------------------------------------------- #
 # Part A — async: @observe on an async def, trace_chat_async, asyncio.gather.
 # --------------------------------------------------------------------------- #
@@ -490,6 +502,9 @@ def main() -> None:
         streamed_text = stream_answer(args.prompt, args.model)
 
         print("\n== C · async + streaming: trace_generate_async(stream=True) ==")
+        # Part A's asyncio.run() closed its loop, taking the async client's
+        # connection pool with it — this asyncio.run() needs a fresh client.
+        _ASYNC_CLIENT = _fresh_async_client(smoke)
         astreamed_text = asyncio.run(astream_completion(args.prompt, args.model))
 
         print("\n== D · generators: @observe on a generator function ==")
