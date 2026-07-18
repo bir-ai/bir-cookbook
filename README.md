@@ -43,7 +43,7 @@ tracking, whole eval experiments. All eight lessons are implemented.
 | 05 | [governance](recipes/ollama-05-governance/) | production controls: sampling, the `enabled` kill switch, redaction, capture limits, per-call capture override (`bir_capture_input` / `bir_capture_output`), `service` / `environment` / `source` tags |
 | 06 | [cost](recipes/ollama-06-cost/) | spend tracking: `model_prices` auto-cost, `set_cost`, `set_usage` |
 | 07 | [persistence](recipes/ollama-07-persistence/) | trace files and servers: rotation (`max_bytes` / `backup_count`), `send_events`, the `bir traces` / `show` / `stats` CLI |
-| 08 | [evals](recipes/ollama-08-evals/) | the offline eval loop: `Dataset`, evaluators, `run_experiment`, `render_experiment_report`, `compare_experiments`, the `bir experiments` / `experiment-show` / `experiment-report` CLI |
+| 08 | [evals](recipes/ollama-08-evals/) | the offline eval loop: `Dataset`, evaluators, `run_experiment` + `run_experiment_async`, `render_experiment_report`, `compare_experiments`, `send_experiment`, the `bir experiments` / `experiment-show` / `experiment-report` CLI |
 
 ## Integration recipes (phase 2, planned)
 

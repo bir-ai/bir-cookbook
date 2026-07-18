@@ -3,10 +3,12 @@
 **Phase 1, Lesson 08 of the Ollama feature tour — the final lesson.** Every
 lesson so far recorded what your LLM code *did*; this one measures how *well*
 it did. The whole eval loop is offline and file-based: a `Dataset` of examples,
-deterministic evaluator factories, `run_experiment` persisting one JSONL row
-per example plus a `.summary.json` sidecar, `render_experiment_report` for a
-shareable report, and `compare_experiments` as the regression gate a CI job can
-key on.
+deterministic evaluator factories, `run_experiment` (and its awaited
+counterpart `run_experiment_async`) persisting one JSONL row per example plus a
+`.summary.json` sidecar, `render_experiment_report` for a shareable report,
+`compare_experiments` as the regression gate a CI job can key on, and
+`send_experiment` to ship a finished run to a Bir server (a loopback fake here,
+as in Lesson 07).
 
 The model's prose differs between smoke and real runs, so every asserted check
 keys on structure the *task's code* controls — the `[doc-id]` citation the code
@@ -32,11 +34,14 @@ fields your evaluators judge.
   evidence). Every score is exactly 1.0 or 0.0 — the evidence lives in
   `EvalResult.metadata`, not the score.
 - **C · `run_experiment`** — the grounded-QA task over all six examples with
-  `record_traces=True` and `raise_on_error=False`. One example fails
-  deterministically (its `doc_id` matches no document, before any model call)
-  and becomes a `status="error"` row while the run continues; aggregates are
-  the per-evaluator *means*, recomputed in-script from the reloaded rows and
-  matched against both the result and the summary sidecar. `record_traces=True`
+  `record_traces=True` and `raise_on_error=False`, scored by seven structural
+  checks — including `field_contains("answer")` (the answer text must name the
+  doc it cites; like `field_equals`, its expected falls back to each example's
+  `expected`) and `numeric_between` bounding the code-set `source_count` field.
+  One example fails deterministically (its `doc_id` matches no document, before
+  any model call) and becomes a `status="error"` row while the run continues;
+  aggregates are the per-evaluator *means*, recomputed in-script from the
+  reloaded rows and matched against both the result and the summary sidecar. `record_traces=True`
   is the bridge to Lessons 01–07: each example runs in its own
   `experiment.<name>.<example_id>` trace in the same `traces.jsonl` every other
   lesson wrote to, every score doubles as a score event on that trace, the
@@ -51,9 +56,13 @@ fields your evaluators judge.
 - **E · the regression gate** — the *same* dataset through the baseline task
   and a deliberately degraded candidate (a plain string instead of the RAG
   mapping; one designated example loses its citation), so the diff is exact:
-  three evaluators regress, one improves, one is unchanged, one is
-  baseline-only (the candidate dropped it) and one candidate-only (never a
-  regression). `per_example=True` pins the small 0.2 citation drop to the one
+  five evaluators regress (the two field checks lose their fields entirely,
+  scoring 0.0 with `reason="non_object"` as evidence), one improves, one is
+  unchanged, one is baseline-only (the candidate dropped it) and two are
+  candidate-only (never a regression) — `contains`, plus an end-anchored
+  `regex_match` (`\[docs-…\]$`, an anchor a plain substring check can't
+  express) that agrees exactly with the citation drop.
+  `per_example=True` pins the small 0.2 citation drop to the one
   example that caused it; `score_tolerances` absorbs that drop (the boundary is
   inclusive) without loosening the other checks, and an override naming a
   non-shared evaluator raises; `tolerance=1.0` opens the gate and
@@ -62,14 +71,31 @@ fields your evaluators judge.
   so CI can diff two persisted runs without re-running anything — gate on
   `diff.has_regressions`. Finally, `list_experiments` reads every
   `.summary.json` newest-first.
-
-Not covered here: `run_experiment_async` (Lesson 04 taught the async story) and
-`send_experiment` (Lesson 07 taught the server story).
+- **F · `run_experiment_async`** — the same loop, awaited: a coroutine task
+  (`trace_chat_async` around the async Ollama client) runs a two-example
+  subset with `max_concurrency=2`. In smoke mode the fake client stalls its
+  first call so the first example *finishes last* — yet results, rows, and
+  aggregates keep dataset order (an SDK guarantee, asserted in both modes),
+  each example still gets its own isolated trace holding its own generation,
+  and the persisted JSONL + `.summary.json` schema is identical to the sync
+  path. `retrieved_context_contains("trace")` checks the retrieval side of the
+  RAG output — both retained docs mention "trace" — and records *which*
+  context matched as evidence.
+- **G · `send_experiment`** — ship a persisted run (rows + summary sidecar) to
+  a Bir server. There is no free hosted server, so — exactly like Lesson 07's
+  `send_events` demo — an in-file loopback fake speaks the real wire protocol
+  (POST `/v1/experiments` answering `{"accepted", "id"}`) in *both* modes;
+  `--smoke` only ever fakes the Ollama client. The returned
+  `SendExperimentResult` echoes the run's id, `accepted` counts every
+  persisted row (the error row included), the POSTed summary equals the local
+  sidecar exactly, and a scripted 503 shows the same transient-failure retry
+  loop `send_events` uses.
 
 ## Key
 
 **None.** Ollama runs locally and is keyless, and the eval loop is entirely
-file-based — nothing leaves your machine.
+file-based — nothing leaves your machine (part G's Bir server is an in-process
+loopback fake this script starts and stops itself).
 
 ## Run it
 
@@ -109,17 +135,31 @@ output — the lesson asserts exact counts), `--smoke` (also
 …
 == E · the regression gate: baseline vs degraded candidate ==
 [bir]   Δ answer_contains_citation   -0.20
+[bir]   Δ answer_names_doc           -1.00
 [bir]   Δ has_rag_shape              -1.00
 [bir]   Δ is_plain_string            +1.00
 [bir]   Δ json_valid                 -1.00
 [bir]   Δ latency_under              +0.00
-[bir] ✓ E: regressed == exactly the three checks the degraded task breaks
+[bir]   Δ source_count_ok            -1.00
+[bir] ✓ E: regressed == exactly the five checks the degraded task breaks
 [bir] ✓ E: has_regressions — the boolean a CI gate keys on — is True
 [bir] ✓ E: missing_score='regress' closes it again — dropping an evaluator is a coverage regression
 [bir] list_experiments -> ['qa-candidate', 'qa-baseline', 'qa-failfast', 'qa-quality']
 
-[bir] all eval checks passed — 4 experiments, 16 experiment traces
-[bir] trace_id=…  events=8  model=llama3.2:1b  usage={…}
+== F · run_experiment_async: the same eval loop, awaited ==
+[bir] completion order this run: ['e4-scores', 'e1-tracing']; persisted order: ['e1-tracing', 'e4-scores']
+[bir] ✓ F: results, rows, and aggregates keep dataset order regardless of completion order
+[bir] ✓ F: the async run scores 1.0 on all seven quality checks plus retrieved_context_contains
+[bir] ✓ F: list_experiments now leads with the async run — sync and async persist alike, newest first
+
+== G · send_experiment: ship a persisted run to a Bir server ==
+[bir] fake Bir experiments server listening on http://127.0.0.1:… (in-process, loopback only)
+[bir] send_experiment('qa-quality.jsonl') -> accepted=6 experiment_id=…
+[bir] ✓ G: SendExperimentResult echoes the run's id; accepted counts every persisted row, the error row included
+[bir] ✓ G: the scripted 503 cost one attempt, the retry succeeded — exactly two POSTs on the wire
+
+[bir] all eval checks passed — 5 experiments, 18 experiment traces
+[bir] trace_id=…  events=10  model=llama3.2:1b  usage={…}
 [bir] wrote ./.bir/traces.jsonl and ./.bir/experiments/ (results, summaries, reports)
 ```
 
@@ -127,7 +167,7 @@ Every `✓` is deterministic in both modes because the evaluators only judge
 structure the task's code controls. Inspect the artifacts with:
 
 ```bash
-ls .bir/experiments/           # 4 × .jsonl + .summary.json, plus the reports
+ls .bir/experiments/           # 5 × .jsonl + .summary.json, plus the reports
 cat .bir/experiments/qa-quality.summary.json
 open .bir/experiments/qa-quality.report.html
 cat .bir/datasets/qa.jsonl     # the exported dataset, one example per line
@@ -144,6 +184,7 @@ first:
 ```bash
 uv run bir experiments
 # ID                                    NAME          STATUS   EXAMPLES  ERRORS  SCORES
+# 5b21c6d8-…                            qa-async      success  2         0       answer_contains_citation=1.00 …
 # 73a9d014-…                            qa-candidate  success  5         0       answer_contains_citation=0.80 …
 # f80de253-…                            qa-baseline   success  5         0       answer_contains_citation=1.00 …
 # d5bd362a-…                            qa-failfast   error    1         1       -

@@ -13,7 +13,7 @@ appends, the ``{"answer", "contexts"}`` mapping it builds — never on live mode
 text. That is also the lesson's design advice: let code, not the model, own the
 fields your evaluators judge.
 
-Five parts, each self-verified by reloading what was persisted (every asserted
+Seven parts, each self-verified by reloading what was persisted (every asserted
 check is deterministic in both modes):
 
   A. datasets — build a ``Dataset`` in code (an example's ``input`` mapping
@@ -45,6 +45,18 @@ check is deterministic in both modes):
      again for the evaluator the candidate dropped, and ``per_example=True``
      pins the small drop to the one example that caused it. Finally
      ``list_experiments`` reads every ``.summary.json`` newest-first.
+  F. run_experiment_async — the same loop as C, awaited: a coroutine task
+     (``trace_chat_async`` around the async Ollama client) runs a two-example
+     subset with ``max_concurrency=2``. Results, rows, and aggregates keep
+     dataset order regardless of completion order (the smoke fake stalls the
+     first call so the first example finishes last), each example still gets
+     its own isolated trace, and ``retrieved_context_contains`` checks the
+     retrieval side of the RAG output — both retained docs mention "trace".
+  G. send_experiment — ship a persisted run (rows + summary sidecar) to a Bir
+     server. As in Lesson 07 there is no free hosted server, so an in-file
+     loopback fake speaks the exact wire protocol — POST ``/v1/experiments``
+     answering ``{"accepted", "id"}`` — in BOTH modes; a scripted 503 shows
+     the same retry loop ``send_events`` uses.
 
 Run it:
   * offline (no Ollama, no network, deterministic — what CI runs):
@@ -53,16 +65,21 @@ Run it:
       ollama pull llama3.2:1b
       uv run python main.py --prompt "In one sentence, what does a trace record?"
 
-Ollama is local and keyless, so there is no API key to set. Not covered here:
-``run_experiment_async`` (Lesson 04 taught the async story) and
-``send_experiment`` (Lesson 07 taught the server story).
+Ollama is local and keyless, so there is no API key to set. The fake Bir
+experiments server in part G is started and stopped by this script and only
+ever binds 127.0.0.1.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
+import threading
 from collections.abc import Mapping
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from bir import configure, load_traces
@@ -77,17 +94,26 @@ from bir.evals import (
     cost_under,
     custom_evaluator,
     exact_match,
+    field_contains,
     field_equals,
     json_valid,
     latency_under,
     list_experiments,
     load_experiment,
     load_experiment_summary,
+    numeric_between,
+    regex_match,
     render_experiment_report,
+    retrieved_context_contains,
     run_experiment,
+    run_experiment_async,
+    send_experiment,
     similarity_above,
 )
-from bir.integrations.ollama import trace_chat as trace_ollama_chat
+from bir.integrations.ollama import (
+    trace_chat as trace_ollama_chat,
+    trace_chat_async as trace_ollama_chat_async,
+)
 
 DEFAULT_TRACE_PATH = Path(__file__).resolve().parent / ".bir" / "traces.jsonl"
 DEFAULT_MODEL = "llama3.2:1b"
@@ -125,26 +151,33 @@ _DOCS = {
 _CITATION_DROPPED_DOC = "docs-datasets"
 _CITATION_DROPPED_ID = "e3-datasets"
 
+# Part F's compact async subset. retrieved_context_contains expects ONE fixed
+# string across the whole run, and both of these docs mention "trace".
+_ASYNC_EXAMPLE_IDS = ("e1-tracing", "e4-scores")
+
 # A generous per-example latency budget keeps the context-evaluator demo
 # deterministic: even a cold local model answers well within five minutes.
 LATENCY_BUDGET_MS = 300_000
 
-# The five evaluators every quality run scores with (part C asserts each
+# The seven evaluators every quality run scores with (part C asserts each
 # success row scores exactly 1.0 on all of them — they only judge structure
 # the task's code controls, never the model's wording).
 QUALITY_EVAL_NAMES = (
     "answer_contains_citation",
+    "answer_names_doc",
     "cites_right_doc",
     "has_rag_shape",
     "json_valid",
     "latency_under",
+    "source_count_ok",
 )
 
-# Keep the client module-level so it is never passed as an @observe/task
+# Keep the clients module-level so they are never passed as an @observe/task
 # argument and therefore never captured as an input (see CLAUDE.md). The model
 # name lives here too: a task's signature is dictated by its examples' input
 # keys, so run-wide settings reach it from module scope, not the dataset.
 _CLIENT = None
+_ASYNC_CLIENT = None
 _MODEL = DEFAULT_MODEL
 
 
@@ -208,15 +241,33 @@ class _FakeOllamaClient:
         )
 
 
+class _FakeAsyncOllamaClient(_FakeOllamaClient):
+    """Deterministic stand-in for ``ollama.AsyncClient`` used only in --smoke mode."""
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    async def chat(self, *, model: str, messages: list[dict], **_kwargs) -> _FakeChatResponse:
+        # The FIRST call stalls briefly, so under max_concurrency=2 the first
+        # example finishes LAST — letting part F show that results still come
+        # back in dataset order, not completion order.
+        self._calls += 1
+        if self._calls == 1:
+            await asyncio.sleep(0.05)
+        return super().chat(model=model, messages=messages)
+
+
 def _build_client(smoke: bool):
+    """Return the (sync client, async client) pair — fakes with --smoke."""
+
     if smoke:
-        return _FakeOllamaClient()
+        return _FakeOllamaClient(), _FakeAsyncOllamaClient()
 
     # Real mode: talk to a local Ollama server. Import the provider library
     # lazily so --smoke needs neither the package nor a running server. Ollama
     # needs no API key — the client honors the OLLAMA_HOST env var if set.
     try:
-        from ollama import Client
+        from ollama import AsyncClient, Client
     except ModuleNotFoundError as exc:  # pragma: no cover - real-path only
         raise SystemExit(
             "The 'ollama' package is required for a real run "
@@ -232,7 +283,74 @@ def _build_client(smoke: bool):
             "Start Ollama and pull the model (`ollama pull llama3.2:1b`), "
             "or run offline with --smoke."
         ) from exc
-    return client
+    return client, AsyncClient()
+
+
+# --------------------------------------------------------------------------- #
+# The fake Bir experiments server — part G's subject, NOT an external service:
+# this script starts it on a daemon thread, it binds 127.0.0.1 on an ephemeral
+# port, and it is stopped in a finally block. Like Lesson 07's events server it
+# runs in BOTH modes (--smoke only fakes the Ollama client), speaking the exact
+# wire protocol send_experiment uses: POST /v1/experiments answering
+# {"accepted": <int>, "id": <experiment_id>}.
+# --------------------------------------------------------------------------- #
+class _FakeBirExperimentsHandler(BaseHTTPRequestHandler):
+    server: _FakeBirExperimentsServer
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A002
+        pass  # keep the lesson output readable
+
+    def do_POST(self) -> None:
+        if self.path != "/v1/experiments":
+            self._respond(404, {"error": "not found"})
+            return
+        srv = self.server
+        with srv.lock:
+            srv.post_attempts += 1
+            if srv.fail_next_status is not None:
+                status = srv.fail_next_status
+                srv.fail_next_status = None
+                self._respond(status, {"error": "scripted transient failure"})
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            experiment_id = payload["summary"]["experiment_id"]
+            srv.experiments[experiment_id] = payload  # re-sends upsert, keyed by id
+        self._respond(200, {"accepted": len(payload["results"]), "id": experiment_id})
+
+    def _respond(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class _FakeBirExperimentsServer(ThreadingHTTPServer):
+    """In-memory Bir server implementing POST /v1/experiments."""
+
+    daemon_threads = True
+
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), _FakeBirExperimentsHandler)
+        self.experiments: dict[str, dict] = {}  # experiment_id -> last posted payload
+        self.post_attempts = 0  # every POST to the experiments path, failures included
+        self.fail_next_status: int | None = None
+        self.lock = threading.Lock()
+        self._thread = threading.Thread(target=self.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        host, port = self.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.shutdown()
+        self.server_close()
 
 
 # --------------------------------------------------------------------------- #
@@ -251,6 +369,18 @@ def _lookup_doc(doc_id: str) -> str:
     return doc
 
 
+def _grounding_messages(question: str, doc: str) -> list[dict]:
+    return [
+        {
+            "role": "user",
+            "content": (
+                "Answer in one short sentence, using only this document.\n\n"
+                f"Document: {doc}\n\nQuestion: {question}"
+            ),
+        }
+    ]
+
+
 def _model_answer(question: str, doc: str) -> str:
     # trace_ollama_chat must run inside an active trace; run_experiment's
     # record_traces=True provides one per example, so the generation lands
@@ -258,36 +388,54 @@ def _model_answer(question: str, doc: str) -> str:
     response = trace_ollama_chat(
         _CLIENT.chat,
         model=_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Answer in one short sentence, using only this document.\n\n"
-                    f"Document: {doc}\n\nQuestion: {question}"
-                ),
-            }
-        ],
+        messages=_grounding_messages(question, doc),
         bir_name="chat.grounded_answer",
         bir_metadata={"recipe": "ollama-08-evals"},
     )
     return response.message.content.strip()
 
 
+def _sourced_output(text: str, doc_id: str, doc: str) -> dict:
+    contexts = [doc]
+    return {
+        "answer": f"{text} [{doc_id}]",
+        "contexts": contexts,
+        "doc_id": doc_id,
+        "source_count": len(contexts),
+    }
+
+
 def answer_with_sources(question: str, doc_id: str) -> dict:
     """Baseline task: the RAG shape, with the citation appended by CODE.
 
     The model writes the prose; the code owns everything the evaluators judge —
-    the mapping shape, the ``contexts`` list, the ``doc_id`` field, and the
-    ``[doc-id]`` citation marker. That is what makes the eval deterministic.
+    the mapping shape, the ``contexts`` list, the ``doc_id`` and ``source_count``
+    fields, and the ``[doc-id]`` citation marker. That is what makes the eval
+    deterministic.
     """
 
     doc = _lookup_doc(doc_id)
     text = _model_answer(question, doc)
-    return {
-        "answer": f"{text} [{doc_id}]",
-        "contexts": [doc],
-        "doc_id": doc_id,
-    }
+    return _sourced_output(text, doc_id, doc)
+
+
+async def answer_with_sources_async(question: str, doc_id: str) -> dict:
+    """Part F's task: the same RAG shape as the baseline, awaited.
+
+    run_experiment_async awaits whatever the task produces, so a coroutine
+    function just works; trace_chat_async records the generation inside the
+    per-example experiment trace exactly like the sync wrapper does.
+    """
+
+    doc = _lookup_doc(doc_id)
+    response = await trace_ollama_chat_async(
+        _ASYNC_CLIENT.chat,
+        model=_MODEL,
+        messages=_grounding_messages(question, doc),
+        bir_name="chat.grounded_answer",
+        bir_metadata={"recipe": "ollama-08-evals"},
+    )
+    return _sourced_output(response.message.content.strip(), doc_id, doc)
 
 
 def casual_answer(question: str, doc_id: str) -> str:
@@ -316,12 +464,15 @@ def _has_rag_shape(output, expected) -> bool:
 
 
 def _quality_evaluators() -> list:
-    """The five structural checks every quality run scores with.
+    """The seven structural checks every quality run scores with.
 
-    ``field_equals("doc_id")`` configures no expected value, so it falls back to
-    each example's ``expected`` (the doc the answer must be grounded in) and
-    would raise if an example had none. ``custom_evaluator`` returns a bool that
-    is coerced to exactly 1.0/0.0.
+    ``field_equals("doc_id")`` and ``field_contains("answer")`` configure no
+    expected value, so each falls back to its example's ``expected`` (the doc
+    the answer must be grounded in) and would raise if an example had none —
+    the code-appended ``[doc-id]`` citation is what puts that id in the answer
+    text. ``numeric_between`` bounds the ``source_count`` field the task's code
+    sets. ``custom_evaluator`` returns a bool that is coerced to exactly
+    1.0/0.0.
     """
 
     return [
@@ -329,6 +480,8 @@ def _quality_evaluators() -> list:
         json_valid(),
         custom_evaluator("has_rag_shape", _has_rag_shape),
         field_equals("doc_id", name="cites_right_doc"),
+        field_contains("answer", name="answer_names_doc"),
+        numeric_between(1, 3, field="source_count", name="source_count_ok"),
         latency_under(LATENCY_BUDGET_MS),
     ]
 
@@ -388,7 +541,7 @@ def _build_examples(prompt: str) -> list[DatasetExample]:
 def _fresh_slate(trace_path: Path, experiments_dir: Path, datasets_dir: Path) -> None:
     """Remove this recipe's output from any previous run.
 
-    Parts C–E assert exact trace and experiment counts (down to what
+    Parts C–G assert exact trace and experiment counts (down to what
     ``list_experiments`` returns), so stale files would break them. Only this
     recipe's own outputs are touched: the active trace file, the experiment
     results/summaries/reports, and the exported dataset.
@@ -424,7 +577,7 @@ def _recompute_aggregates(path: Path) -> dict[str, float]:
 
 
 # --------------------------------------------------------------------------- #
-# The five parts.
+# The seven parts.
 # --------------------------------------------------------------------------- #
 def part_a_datasets(prompt: str, datasets_dir: Path) -> Dataset:
     print("\n== A · datasets: uniquely identified examples, JSONL round-trip ==")
@@ -585,7 +738,7 @@ def part_c_run_experiment(dataset: Dataset, experiments_dir: Path, trace_path: P
     )
     _check(
         result.aggregate_scores == {name: 1.0 for name in QUALITY_EVAL_NAMES},
-        "C: every success row scored exactly 1.0 on all five structural checks",
+        "C: every success row scored exactly 1.0 on all seven structural checks",
     )
 
     # record_traces=True is the bridge to Lessons 01–07: every example ran in
@@ -691,7 +844,10 @@ def part_e_regression_gate(gate_dataset: Dataset, experiments_dir: Path) -> None
         record_traces=True,
     )
     # The candidate drops cites_right_doc from its evaluator list (baseline-only
-    # coverage loss) and adds a candidate-only check of its own.
+    # coverage loss) and adds two candidate-only checks of its own — contains,
+    # and a regex_match whose $ anchor a plain substring check can't express.
+    # The two field evaluators stay: on a plain string there is no field to
+    # resolve, so each scores 0.0 with reason="non_object" as evidence.
     candidate = run_experiment(
         "qa-candidate",
         dataset=gate_dataset,
@@ -700,31 +856,37 @@ def part_e_regression_gate(gate_dataset: Dataset, experiments_dir: Path) -> None
             answer_contains_citation(),
             json_valid(),
             custom_evaluator("has_rag_shape", _has_rag_shape),
+            field_contains("answer", name="answer_names_doc"),
+            numeric_between(1, 3, field="source_count", name="source_count_ok"),
             latency_under(LATENCY_BUDGET_MS),
             _plain_string_evaluator(),
             contains("answer: ", name="has_answer_prefix"),
+            regex_match(r"\[docs-[a-z]+\]$", name="ends_with_citation"),
         ],
         path=candidate_path,
         record_traces=True,
     )
     _check(
-        candidate.aggregate_scores["answer_contains_citation"] == 4 / 5,
-        "E: exactly one candidate example lost its citation — a small, exact 0.2 drop",
+        candidate.aggregate_scores["answer_contains_citation"] == 4 / 5
+        and candidate.aggregate_scores["ends_with_citation"] == 4 / 5,
+        "E: exactly one candidate example lost its citation — the bracket check and the anchored regex agree on the 0.2 drop",
     )
 
     diff = compare_experiments(baseline, candidate, per_example=True)
     for name, delta in diff.deltas.items():
         print(f"[bir]   Δ {name:<26} {delta:+.2f}")
     _check(
-        diff.regressed == {"answer_contains_citation", "has_rag_shape", "json_valid"},
-        "E: regressed == exactly the three checks the degraded task breaks",
+        diff.regressed
+        == {"answer_contains_citation", "answer_names_doc", "has_rag_shape", "json_valid", "source_count_ok"},
+        "E: regressed == exactly the five checks the degraded task breaks",
     )
     _check(
         diff.improved == {"is_plain_string"} and diff.unchanged == {"latency_under"},
         "E: improved and unchanged are exact too — no flakiness in the diff",
     )
     _check(
-        diff.baseline_only == {"cites_right_doc"} and diff.candidate_only == {"has_answer_prefix"},
+        diff.baseline_only == {"cites_right_doc"}
+        and diff.candidate_only == {"ends_with_citation", "has_answer_prefix"},
         "E: dropped and added evaluators are reported, and candidate_only never regresses",
     )
     _check(diff.has_regressions, "E: has_regressions — the boolean a CI gate keys on — is True")
@@ -742,7 +904,7 @@ def part_e_regression_gate(gate_dataset: Dataset, experiments_dir: Path) -> None
     # two persisted runs without re-running anything.
     absorbed = compare_experiments(baseline_path, candidate_path, score_tolerances={"answer_contains_citation": 0.2})
     _check(
-        absorbed.regressed == {"has_rag_shape", "json_valid"},
+        absorbed.regressed == {"answer_names_doc", "has_rag_shape", "json_valid", "source_count_ok"},
         "E: score_tolerances absorbs the 0.2 citation drop (boundary inclusive) without loosening the rest",
     )
     try:
@@ -775,9 +937,121 @@ def part_e_regression_gate(gate_dataset: Dataset, experiments_dir: Path) -> None
     )
 
 
+def part_f_run_experiment_async(dataset: Dataset, experiments_dir: Path, trace_path: Path) -> None:
+    print("\n== F · run_experiment_async: the same eval loop, awaited ==")
+    async_dataset = Dataset([example for example in dataset if example.id in _ASYNC_EXAMPLE_IDS])
+    async_path = experiments_dir / "qa-async.jsonl"
+    result = asyncio.run(
+        run_experiment_async(
+            "qa-async",
+            dataset=async_dataset,
+            task=answer_with_sources_async,  # a coroutine function, awaited per example
+            evaluators=_quality_evaluators()
+            + [retrieved_context_contains("trace", name="context_mentions_trace")],
+            path=async_path,
+            record_traces=True,
+            max_concurrency=2,  # both examples in flight at once
+        )
+    )
+
+    # In smoke mode the fake async client stalls the FIRST call, so the first
+    # example finishes last — yet results, rows, and aggregates stay in
+    # dataset order (an SDK guarantee, asserted in both modes).
+    completion_order = [row.example_id for row in sorted(result.results, key=lambda row: row.end_time)]
+    persisted_order = [row.example_id for row in result.results]
+    print(f"[bir] completion order this run: {completion_order}; persisted order: {persisted_order}")
+    _check(
+        persisted_order == list(_ASYNC_EXAMPLE_IDS),
+        "F: results, rows, and aggregates keep dataset order regardless of completion order",
+    )
+    first, second = result.results
+    _check(
+        datetime.fromisoformat(second.start_time) < datetime.fromisoformat(first.end_time),
+        "F: max_concurrency=2 really overlapped the examples — the second started before the first finished",
+    )
+
+    _check(
+        result.aggregate_scores == {name: 1.0 for name in QUALITY_EVAL_NAMES + ("context_mentions_trace",)},
+        "F: the async run scores 1.0 on all seven quality checks plus retrieved_context_contains",
+    )
+    _check(
+        all(
+            next(score for score in row.scores if score.name == "context_mentions_trace").metadata["matched_index"]
+            == 0
+            for row in result.results
+        ),
+        "F: retrieved_context_contains records WHICH context matched as evidence",
+    )
+
+    reloaded = load_experiment(async_path)
+    _check(
+        reloaded.aggregate_scores == result.aggregate_scores and async_path.with_suffix(".summary.json").exists(),
+        "F: the async run persists the same JSONL rows + .summary.json schema as the sync path",
+    )
+    traces = {trace.id: trace for trace in load_traces(trace_path)}
+    _check(
+        all(
+            row.trace_id in traces
+            and traces[row.trace_id].name == f"experiment.qa-async.{row.example_id}"
+            and sum(1 for event in traces[row.trace_id].events if event.type == "generation") == 1
+            for row in result.results
+        ),
+        "F: even run concurrently, each example got its own isolated trace holding its own generation",
+    )
+    summaries = list_experiments(experiments_dir)
+    _check(
+        len(summaries) == 5 and summaries[0].name == "qa-async",
+        "F: list_experiments now leads with the async run — sync and async persist alike, newest first",
+    )
+
+
+def part_g_send_experiment(result, experiments_dir: Path) -> None:
+    print("\n== G · send_experiment: ship a persisted run to a Bir server ==")
+    quality_path = experiments_dir / "qa-quality.jsonl"
+    server = _FakeBirExperimentsServer()
+    server.start()
+    print(f"[bir] fake Bir experiments server listening on {server.url} (in-process, loopback only)")
+    try:
+        sent = send_experiment(quality_path, server.url)
+        print(
+            f"[bir] send_experiment('{quality_path.name}') -> "
+            f"accepted={sent.accepted} experiment_id={sent.experiment_id}"
+        )
+        _check(
+            sent.experiment_id == result.id and sent.accepted == len(result.results),
+            "G: SendExperimentResult echoes the run's id; accepted counts every persisted row, the error row included",
+        )
+
+        stored = server.experiments[result.id]
+        local_summary = json.loads(quality_path.with_suffix(".summary.json").read_text(encoding="utf-8"))
+        _check(
+            stored["summary"] == local_summary,
+            "G: the POSTed summary equals the local .summary.json sidecar exactly",
+        )
+        _check(
+            [row["example_id"] for row in stored["results"]] == [row.example_id for row in result.results],
+            "G: the payload carries one result row per example, in dataset order",
+        )
+
+        # Transient failures ride the same retry loop as send_events: 5xx /
+        # timeouts / connection errors retry up to retries=2 times, sleeping
+        # backoff * 2**attempt between tries — shortened only to keep this
+        # snappy. A missing file or a 4xx raises immediately instead.
+        server.fail_next_status = 503
+        posts_before = server.post_attempts
+        resent = send_experiment(quality_path, server.url, backoff=0.1)
+        _check(
+            server.post_attempts - posts_before == 2 and resent.experiment_id == result.id,
+            "G: the scripted 503 cost one attempt, the retry succeeded — exactly two POSTs on the wire",
+        )
+    finally:
+        server.stop()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Lesson 08 — evals: datasets, evaluators, run_experiment, reports, and compare_experiments."
+        description="Lesson 08 — evals: datasets, evaluators, run_experiment(_async), reports, "
+        "compare_experiments, and send_experiment."
     )
     parser.add_argument(
         "--prompt",
@@ -806,8 +1080,8 @@ def main() -> None:
     _fresh_slate(trace_path, experiments_dir, datasets_dir)
     configure(trace_path=trace_path, capture_inputs=True, capture_outputs=True)
 
-    global _CLIENT, _MODEL
-    _CLIENT = _build_client(smoke)
+    global _CLIENT, _ASYNC_CLIENT, _MODEL
+    _CLIENT, _ASYNC_CLIENT = _build_client(smoke)
     _MODEL = args.model
 
     try:
@@ -817,6 +1091,8 @@ def main() -> None:
         part_d_reports(result, experiments_dir)
         gate_dataset = Dataset([example for example in dataset if example.id != "e6-missing-doc"])
         part_e_regression_gate(gate_dataset, experiments_dir)
+        part_f_run_experiment_async(dataset, experiments_dir, trace_path)
+        part_g_send_experiment(result, experiments_dir)
     except Exception as exc:  # pragma: no cover - real-path only
         if smoke:
             raise
@@ -831,7 +1107,10 @@ def main() -> None:
     gen = next((event for event in latest.events if event.type == "generation"), None)
     model_name = gen.model if gen is not None else args.model
     usage = (gen.usage if gen is not None else None) or {}
-    print(f"\n[bir] all eval checks passed — 4 experiments, {len(load_traces(trace_path))} experiment traces")
+    print(
+        f"\n[bir] all eval checks passed — {len(list_experiments(experiments_dir))} experiments, "
+        f"{len(load_traces(trace_path))} experiment traces"
+    )
     print(f"[bir] trace_id={latest.id}  events={len(latest.events)}  model={model_name}  usage={usage}")
     print(f"[bir] wrote {trace_path} and {experiments_dir}/ (results, summaries, reports)")
 
